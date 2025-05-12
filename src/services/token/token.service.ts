@@ -1,24 +1,8 @@
 // src/services/token/token.service.ts
 import { SupportedChainId } from "@cowprotocol/cow-sdk";
+import { TokenInfo } from "../../types";
 import sepoliaTokens from "../../data/tokens/testnet/sepolia.json";
 // Import other token lists as needed
-
-export interface TokenInfo {
-  chainId: number;
-  address: string;
-  name: string;
-  symbol: string;
-  decimals: number;
-  logoURI?: string;
-}
-
-const supported = [
-  SupportedChainId.ARBITRUM_ONE,
-  SupportedChainId.BASE,
-  SupportedChainId.GNOSIS_CHAIN,
-  SupportedChainId.MAINNET,
-  SupportedChainId.SEPOLIA,
-];
 
 export class TokenService {
   private tokensByChain: Record<number, TokenInfo[]> = {};

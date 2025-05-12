@@ -46,3 +46,40 @@ export interface UserWallets {
     [BlockchainType.BITCOIN]: BitcoinWallet[];
   };
 }
+
+// Token information interface
+export interface TokenInfo {
+  chainId: number;
+  address: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  logoURI?: string;
+}
+
+// Swap session interface for Telegram bot
+export interface SwapSession {
+  swapStep?: string;
+  selectedChain?: string;
+  selectedChainId?: number;
+  sellToken?: TokenInfo;
+  buyToken?: TokenInfo;
+  sellAmount?: string;
+  buyAmount?: string;
+  amount?: string;
+  swapAction?: string; // "buy" or "sell"
+  wallet?: EthereumWallet;
+}
+
+// Swap result interface
+export interface SwapResult {
+  success: boolean;
+  message: string;
+  orderId?: string;
+  sellToken?: string;
+  buyToken?: string;
+  sellAmount?: string;
+  expectedBuyAmount?: string;
+  actualBuyAmount?: string;
+  error?: any;
+}
