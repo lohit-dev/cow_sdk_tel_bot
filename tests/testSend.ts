@@ -1,7 +1,6 @@
 import { ethers } from "ethers";
 
-const privateKey =
-  "7c7f9b2aac806a014c9a26d31d1c21a123aa6e8c130374369b4b5365e7bc347b";
+const privateKey = process.env.MY_PRIVATE_KEY || "";
 
 const provider = new ethers.providers.JsonRpcProvider(
   "https://sepolia.drpc.org"

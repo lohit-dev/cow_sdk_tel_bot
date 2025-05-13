@@ -81,8 +81,7 @@ async function main() {
       "https://sepolia.drpc.org"
     );
 
-    const privateKey =
-      "7c7f9b2aac806a014c9a26d31d1c21a123aa6e8c130374369b4b5365e7bc347b";
+    const privateKey: string = process.env.MY_PRIVATE_KEY || "";
     const wallet = new ethers.Wallet(privateKey, provider);
 
     console.log(`Using wallet address: ${wallet.address}`);
