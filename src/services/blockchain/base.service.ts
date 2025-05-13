@@ -14,7 +14,7 @@ export abstract class BlockchainService<T extends BaseWallet> {
   ): Promise<T>;
 
   // Get balance
-  abstract getBalance(address: string): Promise<string>;
+  abstract getBalance(address: string, tokenAddress: string): Promise<string>;
 
   // Format address for display
   abstract formatAddress(address: string): string;

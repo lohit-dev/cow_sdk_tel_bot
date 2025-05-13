@@ -30,11 +30,14 @@ export class WalletService {
    */
   public async getBalance(
     address: string,
-    blockchainType: BlockchainType
+    blockchainType: BlockchainType,
+    tokenAddress?: string
   ): Promise<BalanceInfo> {
     const service = await getBlockchainService(blockchainType);
     try {
-      const balance = await service.getBalance(address);
+      // If no token address is provided, we'll use a default value (empty string)
+      // The blockchain service implementation should handle this appropriately
+      const balance = await service.getBalance(address, tokenAddress || "");
       return service.formatBalanceInfo(address, balance);
     } catch (error) {
       console.error(
@@ -55,7 +58,8 @@ export class WalletService {
    */
   public async getBalanceForUser(
     telegramId: number,
-    blockchainType: BlockchainType
+    blockchainType: BlockchainType,
+    tokenAddress?: string
   ): Promise<BalanceInfo> {
     const service = await getBlockchainService(blockchainType);
     try {
@@ -75,8 +79,7 @@ export class WalletService {
         telegramId,
         blockchainType
       );
-      const balance = await service.getBalance(wallet.address);
-      return service.formatBalanceInfo(wallet.address, balance);
+      return this.getBalance(wallet.address, blockchainType, tokenAddress);
     } catch (error) {
       console.error(
         `Error in wallet service getBalanceForUser for ${blockchainType}:`,

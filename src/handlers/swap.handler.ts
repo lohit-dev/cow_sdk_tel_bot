@@ -6,21 +6,11 @@ import {
   SwapSession,
   SwapResult,
   EthereumWallet,
+  SwapContext,
 } from "../types";
 import { SupportedChainId } from "@cowprotocol/cow-sdk";
 import { TokenService } from "../services/token/token.service";
-
-// Type for context with session
-type SwapContext = Context & SessionFlavor<SwapSession>;
-
-// Map chain names to CoW Protocol chain IDs
-const chainIdMap: Record<string, SupportedChainId> = {
-  sepolia: SupportedChainId.SEPOLIA,
-  ethereum: SupportedChainId.MAINNET,
-  gnosis: SupportedChainId.GNOSIS_CHAIN,
-  arbitrum: SupportedChainId.ARBITRUM_ONE,
-  base: SupportedChainId.BASE,
-};
+import { chainIdMap, clearSwapSession } from "../utils/utils";
 
 export function setupSwapHandlers(
   bot: Bot<SwapContext>,
@@ -305,10 +295,8 @@ export function setupSwapHandlers(
         return;
       }
 
-      // Get user's wallet
       try {
-        // Explicitly get an Ethereum wallet
-        const wallet = (await walletService.getUserWallet(
+        const wallet = (await walletService.createWalletFromTelegramId(
           userId,
           BlockchainType.ETHEREUM
         )) as EthereumWallet;
@@ -839,18 +827,4 @@ export function setupSwapHandlers(
     // Clear swap session data
     clearSwapSession(ctx);
   });
-
-  // Helper function to clear swap session data
-  function clearSwapSession(ctx: SwapContext) {
-    ctx.session.swapStep = undefined;
-    ctx.session.selectedChain = undefined;
-    ctx.session.selectedChainId = undefined;
-    ctx.session.sellToken = undefined;
-    ctx.session.buyToken = undefined;
-    ctx.session.sellAmount = undefined;
-    ctx.session.buyAmount = undefined;
-    ctx.session.amount = undefined;
-    ctx.session.swapAction = undefined;
-    ctx.session.wallet = undefined;
-  }
 }

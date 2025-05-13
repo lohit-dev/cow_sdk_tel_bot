@@ -1,14 +1,50 @@
-import { Bot, InlineKeyboard } from "grammy";
-import { BotContext } from "../services/telegram/telegram.service";
+import { Bot, Context, InlineKeyboard } from "grammy";
 import { walletService } from "../services/telegram/wallet.service";
 import { BlockchainType } from "../types";
-import {
-  BitcoinNetwork,
-  BitcoinProvider,
-  BitcoinWallet,
-} from "@catalogfi/wallets";
+import { loadTokens } from "../utils/utils";
 
-export function setupWalletHandlers(bot: Bot<BotContext>) {
+async function getTokenBalances(
+  address: string,
+  blockchain: BlockchainType
+): Promise<{ symbol: string; balance: string; address: string }[]> {
+  try {
+    if (blockchain !== BlockchainType.ETHEREUM) return [];
+
+    const tokens = loadTokens(blockchain);
+    const balancePromises = tokens.map(async (token: any) => {
+      try {
+        const balanceInfo = await walletService.getBalance(
+          address,
+          blockchain,
+          token.address
+        );
+
+        return {
+          symbol: token.symbol,
+          balance: balanceInfo.balance,
+          address: token.address,
+        };
+      } catch (error) {
+        console.error(
+          `Error fetching balance for token ${token.symbol}:`,
+          error
+        );
+        return {
+          symbol: token.symbol,
+          balance: "0.0",
+          address: token.address,
+        };
+      }
+    });
+
+    return await Promise.all(balancePromises);
+  } catch (error) {
+    console.error(`Error getting token balances:`, error);
+    return [];
+  }
+}
+
+export function setupWalletHandlers(bot: Bot<Context>) {
   bot.command("start", async (ctx) => {
     const keyboard = new InlineKeyboard()
       .text("🔑 My Wallets", "show_wallets_menu")
@@ -24,6 +60,8 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
         `/wallet - Show your wallets\n` +
         `/newwallet - Create additional wallet\n` +
         `/balance - Check wallet balance\n` +
+        `/mnemonic - Show your wallet's mnemonic phrase\n` +
+        `/allbalances - Show balances across all chains\n` +
         `/menu - Show this menu again`,
       {
         reply_markup: keyboard,
@@ -291,17 +329,34 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
         userId,
         blockchainType
       );
+
       const balanceInfo = await walletService.getBalance(
         wallet.address,
-        blockchainType
+        blockchainType,
+        ""
       );
 
-      await ctx.reply(
-        `${blockchainType.toUpperCase()} Wallet: ${await walletService.formatAddress(
+      let messageText = `${blockchainType.toUpperCase()} Wallet: ${await walletService.formatAddress(
+        wallet.address,
+        blockchainType
+      )}\nBalance: ${balanceInfo.balance} ${balanceInfo.symbol}`;
+
+      // For Ethereum, fetch token balances
+      if (blockchainType === BlockchainType.ETHEREUM) {
+        const tokenBalances = await getTokenBalances(
           wallet.address,
           blockchainType
-        )}\n` + `Balance: ${balanceInfo.balance} ${balanceInfo.symbol}`
-      );
+        );
+
+        if (tokenBalances.length > 0) {
+          messageText += "\n\nToken Balances:";
+          tokenBalances.forEach((token) => {
+            messageText += `\n${token.symbol}: ${token.balance}`;
+          });
+        }
+      }
+
+      await ctx.reply(messageText);
     } catch (error) {
       console.error("Error checking balance:", error);
       await ctx.reply("Error checking balance. Please try again later.");
@@ -324,7 +379,6 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
         blockchainType
       );
 
-      // Send mnemonic in private message
       await ctx.reply(
         `⚠️ KEEP THIS SECRET! ⚠️\n\n` +
           `Your ${blockchainType.toUpperCase()} wallet mnemonic phrase:\n\n` +
@@ -348,17 +402,47 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
     if (!userId) return ctx.reply("Could not identify user.");
 
     try {
+      const tokenAddresses: Record<BlockchainType, string> = {} as Record<
+        BlockchainType,
+        string
+      >;
+
+      tokenAddresses[BlockchainType.ETHEREUM] = "";
+      tokenAddresses[BlockchainType.BITCOIN] = "";
+
       const balances = await walletService.getAllBalances(userId);
 
       if (balances.length === 0) {
         return ctx.reply("No wallets found.");
       }
 
-      const balanceText = balances
-        .map(
-          (b) => `${b.blockchainType.toUpperCase()}: ${b.balance} ${b.symbol}`
-        )
-        .join("\n");
+      let balanceText = "";
+      for (const balance of balances) {
+        balanceText += `${balance.blockchainType.toUpperCase()} Wallet: ${
+          balance.formattedAddress
+        }\n`;
+        balanceText += `Balance: ${balance.balance} ${balance.symbol}\n\n`;
+      }
+
+      const ethWallet = await walletService.createWalletFromTelegramId(
+        userId,
+        BlockchainType.ETHEREUM
+      );
+      const tokenBalances = await getTokenBalances(
+        ethWallet.address,
+        BlockchainType.ETHEREUM
+      );
+
+      if (tokenBalances.length > 0) {
+        balanceText += "Ethereum Token Balances:\n";
+        tokenBalances.forEach((token) => {
+          balanceText += `${token.symbol}: ${token.balance}\n`;
+        });
+      }
+
+      if (!balanceText) {
+        balanceText = "No wallets found.";
+      }
 
       await ctx.reply(`Your wallet balances:\n\n${balanceText}`);
     } catch (error) {
@@ -379,20 +463,34 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
 
       let balanceInfo: any;
 
-      // For Bitcoin, use the special getBalanceForUser method - why cuz we don't use rpc for this
       if (blockchainType === BlockchainType.BITCOIN) {
         balanceInfo = await walletService.getBalanceForUser(
           userId,
           blockchainType
         );
       } else {
-        balanceInfo = await walletService.getBalance(address, blockchainType);
+        balanceInfo = await walletService.getBalance(
+          address,
+          blockchainType,
+          ""
+        );
+      }
+
+      let messageText = `Balance for ${balanceInfo.formattedAddress}: ${balanceInfo.balance} ${balanceInfo.symbol}`;
+
+      if (blockchainType === BlockchainType.ETHEREUM) {
+        const tokenBalances = await getTokenBalances(address, blockchainType);
+
+        if (tokenBalances.length > 0) {
+          messageText += "\n\nToken Balances:";
+          tokenBalances.forEach((token) => {
+            messageText += `\n${token.symbol}: ${token.balance}`;
+          });
+        }
       }
 
       await ctx.answerCallbackQuery();
-      await ctx.reply(
-        `Balance for ${balanceInfo.formattedAddress}: ${balanceInfo.balance} ${balanceInfo.symbol}`
-      );
+      await ctx.reply(messageText);
     } catch (error) {
       console.error("Error in balance callback:", error);
       await ctx.answerCallbackQuery("Error checking balance");
@@ -515,20 +613,38 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
         blockchainType
       );
 
+      let messageText = `${blockchainType.toUpperCase()} Wallet: ${
+        balanceInfo.formattedAddress
+      }\nBalance: ${balanceInfo.balance} ${balanceInfo.symbol}`;
+
+      if (blockchainType === BlockchainType.ETHEREUM) {
+        // Use createWalletFromTelegramId to match the /balance command behavior
+        const wallet = await walletService.createWalletFromTelegramId(
+          userId,
+          blockchainType
+        );
+        const tokenBalances = await getTokenBalances(
+          wallet.address,
+          blockchainType
+        );
+
+        if (tokenBalances.length > 0) {
+          messageText += "\n\nToken Balances:";
+          tokenBalances.forEach((token) => {
+            messageText += `\n${token.symbol}: ${token.balance}`;
+          });
+        }
+      }
+
       const keyboard = new InlineKeyboard()
         .text("View Wallet", `wallet_${blockchainType}_${userId}`)
         .row()
         .text("Back to Balances", "show_balance_menu");
 
       await ctx.answerCallbackQuery();
-      await ctx.reply(
-        `${blockchainType.toUpperCase()} Wallet: ${
-          balanceInfo.formattedAddress
-        }\n` + `Balance: ${balanceInfo.balance} ${balanceInfo.symbol}`,
-        {
-          reply_markup: keyboard,
-        }
-      );
+      await ctx.reply(messageText, {
+        reply_markup: keyboard,
+      });
     } catch (error) {
       console.error("Error checking balance:", error);
       await ctx.answerCallbackQuery("Error checking balance");
@@ -541,7 +657,19 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
       const userId = Number(ctx.match?.[1]);
       if (!userId) throw new Error("Invalid user ID");
 
+      const tokenAddresses: Record<BlockchainType, string> = {} as Record<
+        BlockchainType,
+        string
+      >;
+
+      tokenAddresses[BlockchainType.ETHEREUM] = "";
+      tokenAddresses[BlockchainType.BITCOIN] = "";
+
       const balances = await walletService.getAllBalances(userId);
+
+      if (balances.length === 0) {
+        return ctx.reply("No wallets found.");
+      }
 
       let balanceText = "";
       for (const balance of balances) {
@@ -549,6 +677,22 @@ export function setupWalletHandlers(bot: Bot<BotContext>) {
           balance.formattedAddress
         }\n`;
         balanceText += `Balance: ${balance.balance} ${balance.symbol}\n\n`;
+      }
+
+      const ethWallet = await walletService.createWalletFromTelegramId(
+        userId,
+        BlockchainType.ETHEREUM
+      );
+      const tokenBalances = await getTokenBalances(
+        ethWallet.address,
+        BlockchainType.ETHEREUM
+      );
+
+      if (tokenBalances.length > 0) {
+        balanceText += "Ethereum Token Balances:\n";
+        tokenBalances.forEach((token) => {
+          balanceText += `${token.symbol}: ${token.balance}\n`;
+        });
       }
 
       if (!balanceText) {

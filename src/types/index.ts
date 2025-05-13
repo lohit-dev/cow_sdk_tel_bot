@@ -1,10 +1,10 @@
-// Blockchain types
+import { Context, SessionFlavor } from "grammy";
+
 export enum BlockchainType {
   ETHEREUM = "ethereum",
   BITCOIN = "bitcoin",
 }
 
-// Base wallet interface
 export interface BaseWallet {
   address: string;
   privateKey: string;
@@ -12,23 +12,19 @@ export interface BaseWallet {
   blockchainType: BlockchainType;
 }
 
-// Ethereum specific wallet
 export interface EthereumWallet extends BaseWallet {
   blockchainType: BlockchainType.ETHEREUM;
   path?: string; // HD derivation path
 }
 
-// Bitcoin specific wallet
 export interface BitcoinWallet extends BaseWallet {
   path?: string; // HD derivation path
   publicKey?: string; // Bitcoin public key
   wif?: string; // Wallet Import Format
 }
 
-// Union type for all wallet types
 export type Wallet = EthereumWallet | BitcoinWallet;
 
-// Balance information
 export interface BalanceInfo {
   address: string;
   formattedAddress: string;
@@ -38,7 +34,17 @@ export interface BalanceInfo {
   error?: string; // Error message if balance fetch failed
 }
 
-// User wallet storage structure
+// Single token balance information
+export interface TokenBalance {
+  symbol: string;
+  balance: string;
+}
+
+// Extended balance info with token balances
+export interface TokenBalanceInfo extends BalanceInfo {
+  tokenBalances?: TokenBalance[];
+}
+
 export interface UserWallets {
   userId: number;
   wallets: {
@@ -47,7 +53,6 @@ export interface UserWallets {
   };
 }
 
-// Token information interface
 export interface TokenInfo {
   chainId: number;
   address: string;
@@ -57,7 +62,6 @@ export interface TokenInfo {
   logoURI?: string;
 }
 
-// Swap session interface for Telegram bot
 export interface SwapSession {
   swapStep?: string;
   selectedChain?: string;
@@ -71,7 +75,8 @@ export interface SwapSession {
   wallet?: EthereumWallet;
 }
 
-// Swap result interface
+export type SwapContext = Context & SessionFlavor<SwapSession>;
+
 export interface SwapResult {
   success: boolean;
   message: string;

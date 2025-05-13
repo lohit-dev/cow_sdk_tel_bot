@@ -3,6 +3,7 @@ import { BlockchainType, EthereumWallet } from "../../types";
 import { BlockchainService } from "./base.service";
 import { CONFIG } from "../../config";
 import { createHmac } from "crypto";
+import logger from "../../utils/logger";
 
 export class EthereumService extends BlockchainService<EthereumWallet> {
   readonly blockchainType = BlockchainType.ETHEREUM;
@@ -91,8 +92,11 @@ export class EthereumService extends BlockchainService<EthereumWallet> {
     const userPart = parseInt(userSeed.slice(0, 8), 16) % 2147483648; // 2^31
 
     // Standard BIP44 derivation path with user-specific data
-    // m / purpose' / coin_type' / user_specific' / 0 / wallet_index
+    // m / purpose' / coin_type' / account
+    // ' / 0 / wallet_index
     const path = `m/44'/60'/${userPart}'/0/${walletIndex}`;
+    logger.info(`The base derivation path is: ${path}`);
+
     const childKey = hdkey.derive(path);
 
     // Add null check for privateKey
@@ -120,16 +124,31 @@ export class EthereumService extends BlockchainService<EthereumWallet> {
   /**
    * Get wallet balance
    */
-  async getBalance(address: string): Promise<string> {
+  async getBalance(address: string, tokenAddress?: string): Promise<string> {
     try {
-      // Use a specific RPC URL instead of the default provider
-      const balance = await this.provider.getBalance(address);
+      // If no token address or empty string, get native ETH balance
+      if (!tokenAddress || tokenAddress === "") {
+        const balance = await this.provider.getBalance(address);
+        return ethers.utils.formatEther(balance);
+      }
 
-      // Convert to ETH and format with 6 decimal places
-      return ethers.utils.formatEther(balance);
+      // Otherwise, get ERC20 token balance
+      const erc20Abi = [
+        "function balanceOf(address owner) view returns (uint256)",
+        "function decimals() view returns (uint8)",
+      ];
+      const contract = new ethers.Contract(
+        tokenAddress,
+        erc20Abi,
+        this.provider
+      );
+      const balance = await contract.balanceOf(address);
+      const decimals = await contract.decimals();
+
+      return ethers.utils.formatUnits(balance, decimals);
     } catch (error) {
-      console.error("Error fetching Ethereum balance:", error);
-      return "0.0 (Network error)";
+      logger.error(`Error getting balance for ${address}: ${error}`);
+      return "0.0";
     }
   }
 

@@ -5,7 +5,7 @@ import { setupSwapHandlers } from "./swap.handler";
 import { walletService } from "../services/telegram/wallet.service";
 
 export function setupHandlers(bot: Bot<BotContext>) {
-  setupWalletHandlers(bot);
+  setupWalletHandlers(bot as any);
   setupSwapHandlers(bot as any, walletService);
 
   bot.catch((err) => {
