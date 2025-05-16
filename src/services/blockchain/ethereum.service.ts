@@ -28,97 +28,52 @@ export class EthereumService extends BlockchainService<EthereumWallet> {
   }
 
   /**
-   * Generate a mnemonic phrase from a private key
+   * Generate a mnemonic from user's seed
    */
-  private generateMnemonicFromPrivateKey(privateKey: string): string {
-    // Remove 0x prefix if present
-    const cleanPrivateKey = privateKey.startsWith("0x")
-      ? privateKey.slice(2)
-      : privateKey;
+  private generateUserMnemonic(telegramId: number | string): string {
+    const userSeed = this.getUserSeed(telegramId);
+    const seedBuffer = Buffer.from(userSeed, "hex");
 
-    // Convert hex to buffer
-    const privateKeyBuffer = Buffer.from(cleanPrivateKey, "hex");
-
-    // Generate entropy from private key
-    // Note: bip39 requires specific entropy lengths (128, 160, 192, 224, or 256 bits)
-    // We'll use the first 16 bytes (128 bits) for a 12-word mnemonic
-    const entropy = privateKeyBuffer.slice(0, 16);
-
-    // Generate mnemonic from entropy
+    // Generate mnemonic from entropy using BIP39
     const bip39 = require("bip39");
-    return bip39.entropyToMnemonic(entropy);
+    return bip39.entropyToMnemonic(seedBuffer);
   }
 
   /**
-   * Create a wallet directly from Telegram ID
-   */
-  async createWalletFromTelegramId(
-    telegramId: number | string
-  ): Promise<EthereumWallet> {
-    const seed = this.getUserSeed(telegramId);
-
-    // Use the first 32 bytes (64 chars) of the seed as private key
-    const privateKey = "0x" + seed.slice(0, 64);
-    const wallet = new ethers.Wallet(privateKey);
-
-    // Generate mnemonic from the private key
-    const mnemonic = this.generateMnemonicFromPrivateKey(privateKey);
-
-    return {
-      address: wallet.address,
-      privateKey,
-      mnemonic,
-      blockchainType: BlockchainType.ETHEREUM,
-    };
-  }
-
-  /**
-   * Get a derived wallet for a user based on telegram ID and wallet index
+   * Get a wallet for a user based on telegram ID and wallet index
+   * This is the single unified method for all wallet creation
    */
   async getUserWallet(
     telegramId: number | string,
     walletIndex = 0
   ): Promise<EthereumWallet> {
-    // Use master mnemonic to create seed
-    const bip39 = require("bip39");
-    const HDKey = require("hdkey");
+    // Generate mnemonic from user's telegram ID
+    const mnemonic = this.generateUserMnemonic(telegramId);
 
-    const seed = bip39.mnemonicToSeedSync(CONFIG.MASTER_MNEMONIC);
-    const hdkey = HDKey.fromMasterSeed(seed);
+    // Generate HD wallet from the mnemonic
+    const hdNode = ethers.utils.HDNode.fromMnemonic(mnemonic);
 
-    // Create a deterministic path using the user's seed and wallet index
-    const userSeed = this.getUserSeed(telegramId);
-    // Use first 8 chars of seed to add user-specific data to the path
-    const userPart = parseInt(userSeed.slice(0, 8), 16) % 2147483648; // 2^31
+    // Derive child wallet using standard path with wallet index
+    const path = `m/44'/60'/0'/0/${walletIndex}`;
+    logger.info(`Deriving wallet with path: ${path}`);
 
-    // Standard BIP44 derivation path with user-specific data
-    // m / purpose' / coin_type' / account
-    // ' / 0 / wallet_index
-    const path = `m/44'/60'/${userPart}'/0/${walletIndex}`;
-    logger.info(`The base derivation path is: ${path}`);
-
-    const childKey = hdkey.derive(path);
-
-    // Add null check for privateKey
-    if (!childKey.privateKey) {
-      throw new Error(
-        `Failed to derive private key for user ${telegramId} at path ${path}`
-      );
-    }
-
-    const privateKey = "0x" + childKey.privateKey.toString("hex");
-    const wallet = new ethers.Wallet(privateKey);
-
-    // Generate mnemonic from the derived private key
-    const mnemonic = this.generateMnemonicFromPrivateKey(privateKey);
+    const wallet = hdNode.derivePath(path);
 
     return {
       address: wallet.address,
-      privateKey,
-      path,
+      privateKey: wallet.privateKey,
       mnemonic,
       blockchainType: BlockchainType.ETHEREUM,
     };
+  }
+
+  /**
+   * Create the primary wallet from Telegram ID (alias for getUserWallet with index 0)
+   */
+  async createWalletFromTelegramId(
+    telegramId: number | string
+  ): Promise<EthereumWallet> {
+    return this.getUserWallet(telegramId, 0);
   }
 
   /**

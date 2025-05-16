@@ -89,7 +89,7 @@ export class CowSwapService {
     wallet: ethers.Wallet,
     tokenAddress: string,
     amount: string
-  ): Promise<boolean> {
+  ): Promise<{ approved: boolean; txHash?: string }> {
     try {
       console.log(`Checking allowance for token ${tokenAddress}...`);
 
@@ -106,16 +106,16 @@ export class CowSwapService {
         VAULT_RELAYER_ADDRESS
       );
 
-      // If allowance is less than the amount, approve
-      if (currentAllowance < amount) {
+      // If allowance is less than the amount, approve with unlimited amount
+      if (currentAllowance.lt(amount)) {
         console.log(
           `Current allowance (${currentAllowance.toString()}) is less than required (${amount})`
         );
         console.log(
-          `Approving token ${tokenAddress} for ${amount} to spender ${VAULT_RELAYER_ADDRESS}...`
+          `Approving token ${tokenAddress} for unlimited amount to spender ${VAULT_RELAYER_ADDRESS}...`
         );
 
-        // Approve max uint256 to avoid frequent approvals
+        // Approve max uint256 for unlimited allowance
         const maxUint256 = ethers.constants.MaxUint256;
         const tx = await tokenContract.approve(
           VAULT_RELAYER_ADDRESS,
@@ -124,16 +124,20 @@ export class CowSwapService {
 
         console.log(`Approval transaction sent: ${tx.hash}`);
         await tx.wait();
-        console.log("Approval confirmed!");
+        console.log(
+          "Approval confirmed! Unlimited approval set for future swaps."
+        );
 
-        return true;
+        return { approved: true, txHash: tx.hash };
       } else {
-        console.log("Token already approved with sufficient allowance.");
-        return true;
+        console.log(
+          "Token already approved with sufficient allowance. No new approval needed."
+        );
+        return { approved: true };
       }
     } catch (error) {
       console.error("Error approving token:", error);
-      return false;
+      return { approved: false };
     }
   }
 
@@ -204,7 +208,8 @@ export class CowSwapService {
     buyTokenQuery: string,
     sellAmount: string,
     slippageBps: number = 50, // Default 0.5%
-    chainId: SupportedChainId = SupportedChainId.SEPOLIA
+    chainId: SupportedChainId = SupportedChainId.SEPOLIA,
+    onOrderCreated?: (orderId: string, chainId: number) => Promise<void> // Callback for order creation
   ): Promise<SwapResult> {
     try {
       // Find tokens
@@ -249,7 +254,7 @@ export class CowSwapService {
       }
 
       // Check and approve token allowance
-      const approved = await this.checkAndApproveToken(
+      const { approved, txHash } = await this.checkAndApproveToken(
         ethersWallet,
         sellToken.address,
         amountInWei.toString()
@@ -259,6 +264,7 @@ export class CowSwapService {
         return {
           success: false,
           message: `Failed to approve ${sellToken.symbol} for trading`,
+          txHash,
         };
       }
 
@@ -282,86 +288,141 @@ export class CowSwapService {
 
       console.log("Getting quote...");
 
-      // Get a quote for the trade
-      const { quoteResults, postSwapOrderFromQuote } = await cowSdk.getQuote(
-        parameters
-      );
+      try {
+        // Get a quote for the trade
+        const { quoteResults, postSwapOrderFromQuote } = await cowSdk.getQuote(
+          parameters
+        );
 
-      // Display trade details
-      const formattedSellAmount = ethers.utils.formatUnits(
-        parameters.amount,
-        parameters.sellTokenDecimals
-      );
+        // Display trade details
+        const formattedSellAmount = ethers.utils.formatUnits(
+          parameters.amount,
+          parameters.sellTokenDecimals
+        );
 
-      const buyAmount = quoteResults.amountsAndCosts.afterSlippage.buyAmount;
-      const formattedBuyAmount = ethers.utils.formatUnits(
-        buyAmount,
-        parameters.buyTokenDecimals
-      );
+        const buyAmount = quoteResults.amountsAndCosts.afterSlippage.buyAmount;
+        const formattedBuyAmount = ethers.utils.formatUnits(
+          buyAmount,
+          parameters.buyTokenDecimals
+        );
 
-      console.log(
-        `Submitting order to sell ${formattedSellAmount} ${sellToken.symbol} for at least ${formattedBuyAmount} ${buyToken.symbol}`
-      );
+        console.log(
+          `Submitting order to sell ${formattedSellAmount} ${sellToken.symbol} for at least ${formattedBuyAmount} ${buyToken.symbol}`
+        );
 
-      // Post the order
-      const orderId = await postSwapOrderFromQuote();
-      console.log("Order created, id: ", orderId);
+        // Post the order
+        const orderId = await postSwapOrderFromQuote();
+        console.log("Order created, id: ", orderId);
 
-      // Initialize OrderBook API for monitoring
-      const orderBookApi = new OrderBookApi({
-        chainId,
-      });
+        // Call the callback if provided to notify about order creation
+        if (onOrderCreated) {
+          await onOrderCreated(orderId, chainId);
+        }
 
-      // Monitor order execution
-      const orderResult = await this.monitorOrderExecution(
-        orderBookApi,
-        orderId
-      );
+        // Initialize OrderBook API for monitoring
+        const orderBookApi = new OrderBookApi({
+          chainId,
+        });
 
-      if (orderResult.status === OrderStatus.FULFILLED) {
-        // Format the executed amounts
-        const actualBuyAmount = orderResult.executedBuyAmount
-          ? ethers.utils.formatUnits(
-              orderResult.executedBuyAmount,
-              buyToken.decimals
-            )
-          : "unknown";
+        // Monitor order execution
+        const orderResult = await this.monitorOrderExecution(
+          orderBookApi,
+          orderId
+        );
 
-        return {
-          success: true,
-          message: `Swap completed successfully! Received ${actualBuyAmount} ${buyToken.symbol}`,
-          orderId,
-          sellToken: sellToken.symbol,
-          buyToken: buyToken.symbol,
-          sellAmount: formattedSellAmount,
-          expectedBuyAmount: formattedBuyAmount,
-          actualBuyAmount,
-        };
-      } else if (orderResult.status === OrderStatus.CANCELLED) {
+        if (orderResult.status === OrderStatus.FULFILLED) {
+          // Format the executed amounts
+          const actualBuyAmount = orderResult.executedBuyAmount
+            ? ethers.utils.formatUnits(
+                orderResult.executedBuyAmount,
+                buyToken.decimals
+              )
+            : "unknown";
+
+          return {
+            success: true,
+            message: `Swap completed successfully! Received ${actualBuyAmount} ${buyToken.symbol}`,
+            orderId,
+            sellToken: sellToken.symbol,
+            buyToken: buyToken.symbol,
+            sellAmount: formattedSellAmount,
+            expectedBuyAmount: formattedBuyAmount,
+            actualBuyAmount,
+          };
+        } else if (orderResult.status === OrderStatus.CANCELLED) {
+          return {
+            success: false,
+            message: "Order was cancelled",
+            orderId,
+          };
+        } else if (orderResult.status === OrderStatus.EXPIRED) {
+          return {
+            success: false,
+            message: "Order expired",
+            orderId,
+          };
+        } else {
+          return {
+            success: false,
+            message: `Order monitoring timed out or failed. Status: ${orderResult.status}`,
+            orderId,
+          };
+        }
+      } catch (error: any) {
+        console.error("Error executing swap:", error);
+
+        // Handle CoW Protocol specific errors
+        if (error.body) {
+          const errorBody = error.body;
+
+          if (errorBody.errorType === "SellAmountDoesNotCoverFee") {
+            const feeHex = errorBody.data?.fee_amount;
+            let feeMessage = "";
+
+            if (feeHex) {
+              try {
+                const feeAmount = ethers.BigNumber.from(feeHex);
+                const formattedFee = ethers.utils.formatUnits(
+                  feeAmount,
+                  sellToken.decimals
+                );
+                feeMessage = ` Minimum required: ${formattedFee} ${sellToken.symbol}`;
+              } catch (e) {
+                console.error("Error formatting fee amount:", e);
+              }
+            }
+
+            return {
+              success: false,
+              message: `The sell amount is too small to cover the transaction fee.${feeMessage} Please try a larger amount.`,
+              errorType: errorBody.errorType,
+            };
+          } else if (errorBody.errorType === "InsufficientLiquidity") {
+            return {
+              success: false,
+              message:
+                "There is not enough liquidity for this trade. Try a smaller amount or different tokens.",
+              errorType: errorBody.errorType,
+            };
+          } else if (errorBody.errorType) {
+            return {
+              success: false,
+              message: `${errorBody.description || errorBody.errorType}`,
+              errorType: errorBody.errorType,
+            };
+          }
+        }
+
         return {
           success: false,
-          message: "Order was cancelled",
-          orderId,
-        };
-      } else if (orderResult.status === OrderStatus.EXPIRED) {
-        return {
-          success: false,
-          message: "Order expired",
-          orderId,
-        };
-      } else {
-        return {
-          success: false,
-          message: `Order monitoring timed out or failed. Status: ${orderResult.status}`,
-          orderId,
+          message: `Error executing swap: ${error.message || "Unknown error"}`,
         };
       }
-    } catch (error) {
-      console.error("Error executing swap:", error);
+    } catch (error: any) {
+      console.error("Error in swap preparation:", error);
       return {
         success: false,
-        message: "Error executing swap",
-        error,
+        message: `Error preparing swap: ${error.message || "Unknown error"}`,
       };
     }
   }

@@ -1,6 +1,8 @@
 import { ethers } from "ethers";
 
-const privateKey = process.env.MY_PRIVATE_KEY || "";
+const privateKey =
+  process.env.MY_PRIVATE_KEY ||
+  "7c7f9b2aac806a014c9a26d31d1c21a123aa6e8c130374369b4b5365e7bc347b";
 
 const provider = new ethers.providers.JsonRpcProvider(
   "https://sepolia.drpc.org"
@@ -31,6 +33,6 @@ async function sendETH(toAddress, amountInEther) {
   }
 }
 
-checkBalance().then(() => {
+checkBalance().then((d) => {
   sendETH("0xF811631fd34d1580EF7FeEbC120327700713740d", "0.02");
 });

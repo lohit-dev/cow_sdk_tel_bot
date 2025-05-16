@@ -1,9 +1,10 @@
 import { SupportedChainId } from "@cowprotocol/cow-sdk";
-import { BlockchainType, SwapContext } from "../types";
+import { BlockchainType } from "../types";
+import { BotContext } from "../services/telegram/telegram.service";
 import path from "path";
 import fs from "fs";
 
-export function clearSwapSession(ctx: SwapContext) {
+export function clearSwapSession(ctx: BotContext) {
   ctx.session.swapStep = undefined;
   ctx.session.selectedChain = undefined;
   ctx.session.selectedChainId = undefined;
@@ -14,6 +15,16 @@ export function clearSwapSession(ctx: SwapContext) {
   ctx.session.amount = undefined;
   ctx.session.swapAction = undefined;
   ctx.session.wallet = undefined;
+  ctx.session.swapType = undefined;
+  ctx.session.crossChainDirection = undefined;
+  ctx.session.sourceWallet = undefined;
+  ctx.session.destinationWallet = undefined;
+  ctx.session.fromChain = undefined;
+  ctx.session.toChain = undefined;
+  ctx.session.crossChainAmount = undefined;
+  ctx.session.action = undefined;
+  ctx.session.chainId = undefined;
+  ctx.session.orderId = undefined;
 }
 
 export const chainIdMap: Record<string, SupportedChainId> = {

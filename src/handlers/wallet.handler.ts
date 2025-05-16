@@ -46,40 +46,101 @@ async function getTokenBalances(
 
 export function setupWalletHandlers(bot: Bot<Context>) {
   bot.command("start", async (ctx) => {
-    const keyboard = new InlineKeyboard()
-      .text("🔑 My Wallets", "show_wallets_menu")
-      .text("💰 Check Balances", "show_balance_menu")
-      .row()
-      .text("➕ Create New Wallet", "show_new_wallet_menu")
-      .text("ℹ️ Help", "show_help");
+    const userId = ctx.from?.id;
+    if (!userId) return ctx.reply("Could not identify user.");
 
-    await ctx.reply(
-      `Welcome to Multi-Chain Wallet Bot! 💰\n\n` +
-        `I can help you create and manage wallets on different blockchains.\n\n` +
-        `Select an option below or use these commands:\n` +
-        `/wallet - Show your wallets\n` +
-        `/newwallet - Create additional wallet\n` +
-        `/balance - Check wallet balance\n` +
-        `/mnemonic - Show your wallet's mnemonic phrase\n` +
-        `/allbalances - Show balances across all chains\n` +
-        `/menu - Show this menu again`,
-      {
-        reply_markup: keyboard,
-      }
-    );
+    try {
+      // First, send a loading message immediately
+      const loadingMessage = await ctx.reply(
+        `Welcome to Multi-Chain Wallet Bot! 💰\n\n` +
+          `Loading your wallets and balances... Please wait a moment.`
+      );
+
+      // Create 2 Ethereum wallets and 1 Bitcoin wallet automatically
+      // Use getUserWallet consistently for all wallet creation
+      const wallet1 = await walletService.getUserWallet(
+        userId,
+        BlockchainType.ETHEREUM,
+        0
+      );
+
+      const wallet2 = await walletService.getUserWallet(
+        userId,
+        BlockchainType.ETHEREUM,
+        1
+      );
+
+      const wallet3 = await walletService.getUserWallet(
+        userId,
+        BlockchainType.BITCOIN,
+        0
+      );
+
+      // Format wallet addresses for display
+      const w1Address = await walletService.formatAddress(
+        wallet1.address,
+        BlockchainType.ETHEREUM
+      );
+      const w2Address = await walletService.formatAddress(
+        wallet2.address,
+        BlockchainType.ETHEREUM
+      );
+      const w3Address = await walletService.formatAddress(
+        wallet3.address,
+        BlockchainType.BITCOIN
+      );
+
+      // Get balances in parallel to speed up the process
+      const [w1Balance, w2Balance, w3Balance] = await Promise.all([
+        walletService.getBalance(wallet1.address, BlockchainType.ETHEREUM),
+        walletService.getBalance(wallet2.address, BlockchainType.ETHEREUM),
+        walletService.getBalance(wallet3.address, BlockchainType.BITCOIN),
+      ]);
+
+      const keyboard = new InlineKeyboard()
+        .text("Buy", "swap_action_buy")
+        .text("Sell", "swap_action_sell")
+        .row()
+        .text("💰 Check Balances", "show_balance_menu")
+        .text("➕ Add Wallet", "show_add_wallet_menu")
+        .row()
+        .text("ℹ️ Help", "show_help");
+
+      // Update the loading message with the complete wallet information
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        loadingMessage.message_id,
+        `Welcome to Multi-Chain Wallet Bot! 💰\n\n` +
+          `Your Wallets:\n` +
+          `w1 (ETH): ${w1Balance.balance} ($0.0)\n${wallet1.address}\n\n` +
+          `w2 (ETH): ${w2Balance.balance} ($0.0)\n${wallet2.address}\n\n` +
+          `w3 (BTC): ${w3Balance.balance} ($0.0)\n${wallet3.address}\n\n` +
+          `Click on a button below to get started or tap ℹ️ Help for more information.`,
+        {
+          reply_markup: keyboard,
+        }
+      );
+    } catch (error) {
+      console.error("Error creating wallets on start:", error);
+      await ctx.reply(
+        "There was an error creating your wallets. Please try again."
+      );
+    }
   });
 
   // /menu command handler
   bot.command("menu", async (ctx) => {
     const keyboard = new InlineKeyboard()
-      .text("🔑 My Wallets", "show_wallets_menu")
-      .text("💰 Check Balances", "show_balance_menu")
+      .text("Buy", "swap_action_buy")
+      .text("Sell", "swap_action_sell")
       .row()
-      .text("➕ Create New Wallet", "show_new_wallet_menu")
+      .text("💰 Check Balances", "show_balance_menu")
+      .text("➕ Add Wallet", "show_add_wallet_menu")
+      .row()
       .text("ℹ️ Help", "show_help");
 
     await ctx.reply(
-      `Multi-Chain Wallet Bot Menu 💰\n\n` + `Select an option below:`,
+      `Multi-Chain Wallet Bot Menu 💰\n\n` + `Select an option to continue:`,
       {
         reply_markup: keyboard,
       }
@@ -109,15 +170,17 @@ export function setupWalletHandlers(bot: Bot<Context>) {
     if (!userId) return ctx.answerCallbackQuery("Could not identify user");
 
     const keyboard = new InlineKeyboard()
-      .text("ETH Balance", `check_balance_eth_${userId}`)
-      .text("BTC Balance", `check_balance_btc_${userId}`)
+      .text("Wallet 1", `check_wallet_balance_${userId}_0`)
+      .text("Wallet 2", `check_wallet_balance_${userId}_1`)
+      .row()
+      .text("Wallet 3", `check_wallet_balance_${userId}_2`)
       .row()
       .text("All Balances", `check_all_balances_${userId}`)
       .row()
       .text("Back to Menu", "show_main_menu");
 
     await ctx.answerCallbackQuery();
-    await ctx.reply("Select which balance to check:", {
+    await ctx.reply("Select which wallet balance to check:", {
       reply_markup: keyboard,
     });
   });
@@ -137,6 +200,131 @@ export function setupWalletHandlers(bot: Bot<Context>) {
     await ctx.reply("Select blockchain type for your new wallet:", {
       reply_markup: keyboard,
     });
+  });
+
+  // Show add wallet menu callback handler
+  bot.callbackQuery("show_add_wallet_menu", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return ctx.answerCallbackQuery("Could not identify user");
+
+    await ctx.answerCallbackQuery();
+
+    // First, select which wallet slot to replace
+    const keyboard = new InlineKeyboard()
+      .text("Replace w1", "replace_wallet_0")
+      .text("Replace w2", "replace_wallet_1")
+      .row()
+      .text("Replace w3", "replace_wallet_2")
+      .row()
+      .text("Back to Menu", "show_main_menu");
+
+    await ctx.reply("Select which wallet you want to replace:", {
+      reply_markup: keyboard,
+    });
+  });
+
+  // Handle wallet replacement selection
+  bot.callbackQuery(/replace_wallet_(\d)/, async (ctx) => {
+    const walletIndex = parseInt(ctx.match?.[1] || "0");
+    const userId = ctx.from?.id;
+    if (!userId) return ctx.answerCallbackQuery("Could not identify user");
+
+    await ctx.answerCallbackQuery();
+
+    // Now select blockchain type for the new wallet
+    const keyboard = new InlineKeyboard()
+      .text("Ethereum", `create_replacement_eth_${userId}_${walletIndex}`)
+      .text("Bitcoin", `create_replacement_btc_${userId}_${walletIndex}`)
+      .row()
+      .text("Back", "show_add_wallet_menu");
+
+    await ctx.reply("Select blockchain type for your new wallet:", {
+      reply_markup: keyboard,
+    });
+  });
+
+  // Handle wallet replacement creation - Ethereum
+  bot.callbackQuery(/create_replacement_eth_(\d+)_(\d)/, async (ctx) => {
+    const userId = parseInt(ctx.match?.[1] || "0");
+    const walletIndex = parseInt(ctx.match?.[2] || "0");
+
+    await ctx.answerCallbackQuery();
+
+    try {
+      // Create a new Ethereum wallet at the specified index
+      const wallet = await walletService.getUserWallet(
+        userId,
+        BlockchainType.ETHEREUM,
+        walletIndex
+      );
+
+      const address = await walletService.formatAddress(
+        wallet.address,
+        BlockchainType.ETHEREUM
+      );
+
+      await ctx.reply(
+        `✅ Successfully created new Ethereum wallet at position w${
+          walletIndex + 1
+        }:\n\n` +
+          `Address: ${wallet.address}\n` +
+          `Formatted: ${address}\n\n` +
+          `This wallet replaces your previous w${walletIndex + 1} wallet.`,
+        {
+          reply_markup: new InlineKeyboard().text(
+            "Back to Menu",
+            "show_main_menu"
+          ),
+        }
+      );
+    } catch (error) {
+      console.error("Error creating replacement wallet:", error);
+      await ctx.reply("Failed to create new wallet. Please try again.", {
+        reply_markup: new InlineKeyboard().text("Back", "show_add_wallet_menu"),
+      });
+    }
+  });
+
+  // Handle wallet replacement creation - Bitcoin
+  bot.callbackQuery(/create_replacement_btc_(\d+)_(\d)/, async (ctx) => {
+    const userId = parseInt(ctx.match?.[1] || "0");
+    const walletIndex = parseInt(ctx.match?.[2] || "0");
+
+    await ctx.answerCallbackQuery();
+
+    try {
+      // Create a new Bitcoin wallet
+      const wallet = await walletService.getUserWallet(
+        userId,
+        BlockchainType.BITCOIN,
+        walletIndex
+      );
+
+      const address = await walletService.formatAddress(
+        wallet.address,
+        BlockchainType.BITCOIN
+      );
+
+      await ctx.reply(
+        `✅ Successfully created new Bitcoin wallet at position w${
+          walletIndex + 1
+        }:\n\n` +
+          `Address: ${wallet.address}\n` +
+          `Formatted: ${address}\n\n` +
+          `This wallet replaces your previous w${walletIndex + 1} wallet.`,
+        {
+          reply_markup: new InlineKeyboard().text(
+            "Back to Menu",
+            "show_main_menu"
+          ),
+        }
+      );
+    } catch (error) {
+      console.error("Error creating replacement wallet:", error);
+      await ctx.reply("Failed to create new wallet. Please try again.", {
+        reply_markup: new InlineKeyboard().text("Back", "show_add_wallet_menu"),
+      });
+    }
   });
 
   // Show help callback handler
@@ -165,10 +353,12 @@ export function setupWalletHandlers(bot: Bot<Context>) {
   // Show main menu callback handler
   bot.callbackQuery("show_main_menu", async (ctx) => {
     const keyboard = new InlineKeyboard()
-      .text("🔑 My Wallets", "show_wallets_menu")
-      .text("💰 Check Balances", "show_balance_menu")
+      .text("Buy", "swap_action_buy")
+      .text("Sell", "swap_action_sell")
       .row()
-      .text("➕ Create New Wallet", "show_new_wallet_menu")
+      .text("💰 Check Balances", "show_balance_menu")
+      .text("➕ Add Wallet", "show_add_wallet_menu")
+      .row()
       .text("ℹ️ Help", "show_help");
 
     await ctx.answerCallbackQuery();
@@ -191,9 +381,10 @@ export function setupWalletHandlers(bot: Bot<Context>) {
         ? BlockchainType.BITCOIN
         : BlockchainType.ETHEREUM;
 
-      const wallet = await walletService.createWalletFromTelegramId(
+      const wallet = await walletService.getUserWallet(
         userId,
-        blockchainType
+        blockchainType,
+        0
       );
 
       const keyboard = new InlineKeyboard()
@@ -325,16 +516,26 @@ export function setupWalletHandlers(bot: Bot<Context>) {
         : BlockchainType.ETHEREUM;
 
       // Get the main wallet by default
-      const wallet = await walletService.createWalletFromTelegramId(
+      const wallet = await walletService.getUserWallet(
         userId,
-        blockchainType
+        blockchainType,
+        0
       );
 
-      const balanceInfo = await walletService.getBalance(
-        wallet.address,
-        blockchainType,
-        ""
-      );
+      let balanceInfo: any;
+
+      if (blockchainType === BlockchainType.BITCOIN) {
+        balanceInfo = await walletService.getBalanceForUser(
+          userId,
+          blockchainType
+        );
+      } else {
+        balanceInfo = await walletService.getBalance(
+          wallet.address,
+          blockchainType,
+          ""
+        );
+      }
 
       let messageText = `${blockchainType.toUpperCase()} Wallet: ${await walletService.formatAddress(
         wallet.address,
@@ -374,15 +575,17 @@ export function setupWalletHandlers(bot: Bot<Context>) {
         ? BlockchainType.BITCOIN
         : BlockchainType.ETHEREUM;
 
-      const wallet = await walletService.createWalletFromTelegramId(
+      const wallet = await walletService.getUserWallet(
         userId,
-        blockchainType
+        blockchainType,
+        0
       );
 
       await ctx.reply(
         `⚠️ KEEP THIS SECRET! ⚠️\n\n` +
           `Your ${blockchainType.toUpperCase()} wallet mnemonic phrase:\n\n` +
           `\`${wallet.mnemonic}\`\n\n` +
+          `IMPORTANT: This mnemonic can only be used to import your primary wallet (wallet 1) into MetaMask or other wallets. Additional wallets use a custom derivation path and cannot be directly imported.\n\n` +
           `Never share this with anyone! Anyone with this phrase can access your funds.`,
         {
           parse_mode: "Markdown",
@@ -424,9 +627,10 @@ export function setupWalletHandlers(bot: Bot<Context>) {
         balanceText += `Balance: ${balance.balance} ${balance.symbol}\n\n`;
       }
 
-      const ethWallet = await walletService.createWalletFromTelegramId(
+      const ethWallet = await walletService.getUserWallet(
         userId,
-        BlockchainType.ETHEREUM
+        BlockchainType.ETHEREUM,
+        0
       );
       const tokenBalances = await getTokenBalances(
         ethWallet.address,
@@ -448,6 +652,202 @@ export function setupWalletHandlers(bot: Bot<Context>) {
     } catch (error) {
       console.error("Error checking balances:", error);
       await ctx.reply("Error checking balances. Please try again later.");
+    }
+  });
+
+  // Wallet balance check callback handler
+  bot.callbackQuery(/^check_wallet_balance_(\d+)_(\d+)$/, async (ctx) => {
+    try {
+      const userId = Number(ctx.match?.[1]);
+      const walletIndex = Number(ctx.match?.[2]);
+
+      if (!userId || isNaN(walletIndex))
+        throw new Error("Invalid user ID or wallet index");
+
+      // Determine wallet type based on index (0 and 1 are ETH, 2 is BTC)
+      const blockchainType =
+        walletIndex === 2 ? BlockchainType.BITCOIN : BlockchainType.ETHEREUM;
+
+      // Get the wallet using the same methods as in /start command
+      let wallet;
+      if (walletIndex === 0 || walletIndex === 2) {
+        // For wallet 1 (ETH) and wallet 3 (BTC), use getUserWallet
+        wallet = await walletService.getUserWallet(
+          userId,
+          blockchainType,
+          walletIndex
+        );
+      } else {
+        // For wallet 2 (ETH), use getUserWallet
+        wallet = await walletService.getUserWallet(userId, blockchainType, 1);
+      }
+
+      let balanceInfo: any;
+
+      if (blockchainType === BlockchainType.BITCOIN) {
+        balanceInfo = await walletService.getBalanceForUser(
+          userId,
+          blockchainType
+        );
+      } else {
+        balanceInfo = await walletService.getBalance(
+          wallet.address,
+          blockchainType,
+          ""
+        );
+      }
+
+      // Format address for display
+      const formattedAddress =
+        wallet.address.substring(0, 6) +
+        "..." +
+        wallet.address.substring(wallet.address.length - 4);
+
+      let messageText = `${blockchainType.toUpperCase()} Wallet: ${formattedAddress}\nBalance: ${
+        balanceInfo.balance
+      } ${balanceInfo.symbol}`;
+
+      // For Ethereum, fetch token balances
+      if (blockchainType === BlockchainType.ETHEREUM) {
+        const tokenBalances = await getTokenBalances(
+          wallet.address,
+          blockchainType
+        );
+
+        // Always show all token balances
+        messageText += "\n\nToken Balances:";
+        tokenBalances.forEach((token) => {
+          messageText += `\n${token.symbol}: ${token.balance}`;
+        });
+      }
+
+      const keyboard = new InlineKeyboard()
+        .text("View Wallet", `wallet_${blockchainType}_${userId}`)
+        .row()
+        .text("Back to Balances", "show_balance_menu");
+
+      await ctx.answerCallbackQuery();
+      await ctx.reply(messageText, {
+        reply_markup: keyboard,
+      });
+    } catch (error) {
+      console.error("Error checking wallet balance:", error);
+      await ctx.answerCallbackQuery("Error checking balance");
+    }
+  });
+
+  // All balances check callback handler
+  bot.callbackQuery(/^check_all_balances_(\d+)$/, async (ctx) => {
+    try {
+      const userId = Number(ctx.match?.[1]);
+      if (!userId) throw new Error("Invalid user ID");
+
+      // Get all three wallets
+      const ethWallet1 = await walletService.getUserWallet(
+        userId,
+        BlockchainType.ETHEREUM,
+        0
+      );
+
+      const ethWallet2 = await walletService.getUserWallet(
+        userId,
+        BlockchainType.ETHEREUM,
+        1
+      );
+
+      const btcWallet = await walletService.getUserWallet(
+        userId,
+        BlockchainType.BITCOIN,
+        0
+      );
+
+      // Get balances for each wallet
+      const ethBalance1 = await walletService.getBalance(
+        ethWallet1.address,
+        BlockchainType.ETHEREUM
+      );
+
+      const ethBalance2 = await walletService.getBalance(
+        ethWallet2.address,
+        BlockchainType.ETHEREUM
+      );
+
+      // For Bitcoin, use getBalanceForUser instead of getBalance
+      const btcBalance = await walletService.getBalanceForUser(
+        userId,
+        BlockchainType.BITCOIN
+      );
+
+      // Format addresses for display
+      const formattedEthAddress1 =
+        ethWallet1.address.substring(0, 6) +
+        "..." +
+        ethWallet1.address.substring(ethWallet1.address.length - 4);
+
+      const formattedEthAddress2 =
+        ethWallet2.address.substring(0, 6) +
+        "..." +
+        ethWallet2.address.substring(ethWallet2.address.length - 4);
+
+      const formattedBtcAddress =
+        btcWallet.address.substring(0, 6) +
+        "..." +
+        btcWallet.address.substring(btcWallet.address.length - 4);
+
+      let balanceText = "";
+
+      // Display Wallet 1 (ETH)
+      balanceText += `Wallet 1 (ETH): ${formattedEthAddress1}\n`;
+      balanceText += `Balance: ${ethBalance1.balance} ETH\n\n`;
+
+      // Get token balances for ETH Wallet 1
+      const tokenBalances1 = await getTokenBalances(
+        ethWallet1.address,
+        BlockchainType.ETHEREUM
+      );
+
+      if (tokenBalances1.length > 0) {
+        balanceText += "Token Balances:\n";
+        tokenBalances1.forEach((token) => {
+          balanceText += `${token.symbol}: ${token.balance}\n`;
+        });
+        balanceText += "\n";
+      }
+
+      // Display Wallet 2 (ETH)
+      balanceText += `Wallet 2 (ETH): ${formattedEthAddress2}\n`;
+      balanceText += `Balance: ${ethBalance2.balance} ETH\n\n`;
+
+      // Get token balances for ETH Wallet 2
+      const tokenBalances2 = await getTokenBalances(
+        ethWallet2.address,
+        BlockchainType.ETHEREUM
+      );
+
+      if (tokenBalances2.length > 0) {
+        balanceText += "Token Balances:\n";
+        tokenBalances2.forEach((token) => {
+          balanceText += `${token.symbol}: ${token.balance}\n`;
+        });
+        balanceText += "\n";
+      }
+
+      // Display Wallet 3 (BTC)
+      balanceText += `Wallet 3 (BTC): ${formattedBtcAddress}\n`;
+      balanceText += `Balance: ${btcBalance.balance} BTC\n`;
+
+      const keyboard = new InlineKeyboard()
+        .text("Back to Balances", "show_balance_menu")
+        .row()
+        .text("Back to Main Menu", "show_main_menu");
+
+      await ctx.answerCallbackQuery();
+      await ctx.reply(`Your wallet balances:\n\n${balanceText}`, {
+        reply_markup: keyboard,
+      });
+    } catch (error) {
+      console.error("Error checking all balances:", error);
+      await ctx.answerCallbackQuery("Error checking balances");
     }
   });
 
@@ -481,12 +881,10 @@ export function setupWalletHandlers(bot: Bot<Context>) {
       if (blockchainType === BlockchainType.ETHEREUM) {
         const tokenBalances = await getTokenBalances(address, blockchainType);
 
-        if (tokenBalances.length > 0) {
-          messageText += "\n\nToken Balances:";
-          tokenBalances.forEach((token) => {
-            messageText += `\n${token.symbol}: ${token.balance}`;
-          });
-        }
+        messageText += "\n\nToken Balances:";
+        tokenBalances.forEach((token) => {
+          messageText += `\n${token.symbol}: ${token.balance}`;
+        });
       }
 
       await ctx.answerCallbackQuery();
@@ -505,9 +903,10 @@ export function setupWalletHandlers(bot: Bot<Context>) {
 
       if (!userId || !blockchainType) throw new Error("Invalid callback data");
 
-      const wallet = await walletService.createWalletFromTelegramId(
+      const wallet = await walletService.getUserWallet(
         userId,
-        blockchainType
+        blockchainType,
+        0
       );
 
       await ctx.answerCallbackQuery();
@@ -515,6 +914,7 @@ export function setupWalletHandlers(bot: Bot<Context>) {
         `⚠️ KEEP THIS SECRET! ⚠️\n\n` +
           `Your ${blockchainType.toUpperCase()} wallet mnemonic phrase:\n\n` +
           `\`${wallet.mnemonic}\`\n\n` +
+          `IMPORTANT: This mnemonic can only be used to import your primary wallet (index 0) into MetaMask or other wallets. Additional wallets use a custom derivation path and cannot be directly imported.\n\n` +
           `Never share this with anyone! Anyone with this phrase can access your funds.`,
         {
           parse_mode: "Markdown",
@@ -570,9 +970,10 @@ export function setupWalletHandlers(bot: Bot<Context>) {
 
       if (!userId) throw new Error("Invalid user ID");
 
-      const wallet = await walletService.createWalletFromTelegramId(
+      const wallet = await walletService.getUserWallet(
         userId,
-        blockchainType
+        blockchainType,
+        0
       );
 
       const keyboard = new InlineKeyboard()
@@ -608,32 +1009,41 @@ export function setupWalletHandlers(bot: Bot<Context>) {
 
       if (!userId) throw new Error("Invalid user ID");
 
-      const balanceInfo = await walletService.getBalanceForUser(
-        userId,
-        blockchainType
-      );
+      let balanceInfo: any;
+
+      if (blockchainType === BlockchainType.BITCOIN) {
+        balanceInfo = await walletService.getBalanceForUser(
+          userId,
+          blockchainType
+        );
+      } else {
+        // Use getUserWallet to match the /balance command behavior
+        const wallet = await walletService.getUserWallet(
+          userId,
+          blockchainType,
+          0
+        );
+        balanceInfo = await walletService.getBalance(
+          wallet.address,
+          blockchainType,
+          ""
+        );
+      }
 
       let messageText = `${blockchainType.toUpperCase()} Wallet: ${
         balanceInfo.formattedAddress
       }\nBalance: ${balanceInfo.balance} ${balanceInfo.symbol}`;
 
       if (blockchainType === BlockchainType.ETHEREUM) {
-        // Use createWalletFromTelegramId to match the /balance command behavior
-        const wallet = await walletService.createWalletFromTelegramId(
-          userId,
-          blockchainType
-        );
         const tokenBalances = await getTokenBalances(
-          wallet.address,
+          balanceInfo.address,
           blockchainType
         );
 
-        if (tokenBalances.length > 0) {
-          messageText += "\n\nToken Balances:";
-          tokenBalances.forEach((token) => {
-            messageText += `\n${token.symbol}: ${token.balance}`;
-          });
-        }
+        messageText += "\n\nToken Balances:";
+        tokenBalances.forEach((token) => {
+          messageText += `\n${token.symbol}: ${token.balance}`;
+        });
       }
 
       const keyboard = new InlineKeyboard()
@@ -648,69 +1058,6 @@ export function setupWalletHandlers(bot: Bot<Context>) {
     } catch (error) {
       console.error("Error checking balance:", error);
       await ctx.answerCallbackQuery("Error checking balance");
-    }
-  });
-
-  // All balances check callback handler
-  bot.callbackQuery(/^check_all_balances_(\d+)$/, async (ctx) => {
-    try {
-      const userId = Number(ctx.match?.[1]);
-      if (!userId) throw new Error("Invalid user ID");
-
-      const tokenAddresses: Record<BlockchainType, string> = {} as Record<
-        BlockchainType,
-        string
-      >;
-
-      tokenAddresses[BlockchainType.ETHEREUM] = "";
-      tokenAddresses[BlockchainType.BITCOIN] = "";
-
-      const balances = await walletService.getAllBalances(userId);
-
-      if (balances.length === 0) {
-        return ctx.reply("No wallets found.");
-      }
-
-      let balanceText = "";
-      for (const balance of balances) {
-        balanceText += `${balance.blockchainType.toUpperCase()} Wallet: ${
-          balance.formattedAddress
-        }\n`;
-        balanceText += `Balance: ${balance.balance} ${balance.symbol}\n\n`;
-      }
-
-      const ethWallet = await walletService.createWalletFromTelegramId(
-        userId,
-        BlockchainType.ETHEREUM
-      );
-      const tokenBalances = await getTokenBalances(
-        ethWallet.address,
-        BlockchainType.ETHEREUM
-      );
-
-      if (tokenBalances.length > 0) {
-        balanceText += "Ethereum Token Balances:\n";
-        tokenBalances.forEach((token) => {
-          balanceText += `${token.symbol}: ${token.balance}\n`;
-        });
-      }
-
-      if (!balanceText) {
-        balanceText = "No wallets found.";
-      }
-
-      const keyboard = new InlineKeyboard()
-        .text("Back to Balances", "show_balance_menu")
-        .row()
-        .text("Back to Main Menu", "show_main_menu");
-
-      await ctx.answerCallbackQuery();
-      await ctx.reply(`Your wallet balances:\n\n${balanceText}`, {
-        reply_markup: keyboard,
-      });
-    } catch (error) {
-      console.error("Error checking all balances:", error);
-      await ctx.answerCallbackQuery("Error checking balances");
     }
   });
 }

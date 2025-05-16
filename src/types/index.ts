@@ -72,10 +72,28 @@ export interface SwapSession {
   buyAmount?: string;
   amount?: string;
   swapAction?: string; // "buy" or "sell"
-  wallet?: EthereumWallet;
+  wallet?: Wallet;
+  availableWallets?:
+    | // for bot starting
+    {
+        w1: Wallet;
+        w2: Wallet;
+        w3: Wallet;
+      }
+    // for garden
+    | {
+        eth: EthereumWallet;
+        btc: BitcoinWallet;
+      };
+  // Cross-chain swap properties
+  swapType?: "dex" | "cross_chain";
+  crossChainDirection?: "eth_btc" | "btc_eth";
+  sourceWallet?: Wallet;
+  destinationWallet?: Wallet;
+  fromChain?: BlockchainType;
+  toChain?: BlockchainType;
+  crossChainAmount?: string;
 }
-
-export type SwapContext = Context & SessionFlavor<SwapSession>;
 
 export interface SwapResult {
   success: boolean;
@@ -86,5 +104,9 @@ export interface SwapResult {
   sellAmount?: string;
   expectedBuyAmount?: string;
   actualBuyAmount?: string;
+  errorType?: string;
   error?: any;
+  approvalTxHash?: string;
+  txHash?: string; // For consistency with the code that uses txHash
+  chainId?: number;
 }
