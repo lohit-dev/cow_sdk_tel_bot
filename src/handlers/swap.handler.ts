@@ -5,7 +5,6 @@ import { GardenService } from "../services/swap/garden.service";
 import { TokenService } from "../services/token/token.service";
 import {
   BlockchainType,
-  SwapSession,
   SwapResult,
   Wallet,
   EthereumWallet,
@@ -286,132 +285,42 @@ export function setupSwapHandlers(
       // Acknowledge the callback query
       await ctx.answerCallbackQuery();
 
-      // Store the selected action in session
+      // Clear previous swap session and set action
+      clearSwapSession(ctx);
       ctx.session.swapAction = action;
 
-      // If wallet is not selected yet, prompt user to select one
-      if (!ctx.session.wallet) {
-        const userId = ctx.from?.id;
-        if (!userId) {
-          await ctx.reply("Could not identify your user ID. Please try again.");
-          return;
+      // Log the current state to debug
+      logger.info(
+        `Starting ${action} flow for user: ${
+          ctx.from?.id
+        }, session: ${JSON.stringify(ctx.session)}`
+      );
+
+      // First, ask user to select swap type: DEX or Cross-chain
+      const message = await ctx.reply(
+        "Select the type of swap you want to perform:",
+        {
+          reply_markup: new InlineKeyboard()
+            .text("DEX Swap (Same Chain)", `swap_type_dex_${action}`)
+            .row()
+            .text(
+              "Cross-chain Swap (BTC ↔ ETH)",
+              `swap_type_cross_chain_${action}`
+            ),
         }
+      );
 
-        // Get the wallets (2 Ethereum, 1 Bitcoin)
-        const wallet1 = await walletService.createWalletFromTelegramId(
-          userId,
-          BlockchainType.ETHEREUM
-        );
-
-        const wallet2 = await walletService.getUserWallet(
-          userId,
-          BlockchainType.ETHEREUM,
-          1
-        );
-
-        const wallet3 = await walletService.createWalletFromTelegramId(
-          userId,
-          BlockchainType.BITCOIN
-        );
-
-        // Format wallet addresses for display
-        const w1Address = await walletService.formatAddress(
-          wallet1.address,
-          BlockchainType.ETHEREUM
-        );
-        const w2Address = await walletService.formatAddress(
-          wallet2.address,
-          BlockchainType.ETHEREUM
-        );
-        const w3Address = await walletService.formatAddress(
-          wallet3.address,
-          BlockchainType.BITCOIN
-        );
-
-        // Store wallets in session for later use
-        ctx.session.availableWallets = {
-          w1: wallet1,
-          w2: wallet2,
-          w3: wallet3,
-        };
-
-        // For swaps, we can only use Ethereum wallets, so filter the options accordingly
-        const keyboard = new InlineKeyboard();
-
-        // Only show Ethereum wallets for swapping
-        if (wallet1.blockchainType === BlockchainType.ETHEREUM) {
-          keyboard.text("w1 (ETH)", "swap_select_wallet_0");
-        }
-
-        if (wallet2.blockchainType === BlockchainType.ETHEREUM) {
-          keyboard.text("w2 (ETH)", "swap_select_wallet_1");
-        }
-
-        if (wallet3.blockchainType === BlockchainType.ETHEREUM) {
-          keyboard.text("w3 (ETH)", "swap_select_wallet_2");
-        }
-
-        keyboard.row().text("Custom ", "swap_select_wallet_custom");
-
-        await ctx.reply(
-          `Please select which wallet to use for this swap:\n\n` +
-            `${
-              wallet1.blockchainType === BlockchainType.ETHEREUM ? " " : " "
-            }w1 (ETH): ${w1Address}\n` +
-            `${
-              wallet2.blockchainType === BlockchainType.ETHEREUM ? " " : " "
-            }w2 (ETH): ${w2Address}\n` +
-            `${
-              wallet3.blockchainType === BlockchainType.ETHEREUM ? " " : " "
-            }w3 (BTC): ${w3Address}\n\n` +
-            `Click on a wallet to select it. Only Ethereum wallets can be used for swaps.`,
-          {
-            reply_markup: keyboard,
-          }
-        );
-        return;
-      }
-
-      // If wallet is selected but chain is not, show chain selection
-      if (!ctx.session.selectedChainId) {
-        await ctx.reply(
-          "Welcome to the swap feature! You can swap tokens using CoW Protocol.\n\n" +
-            "Select the chain you want to use:",
-          {
-            reply_markup: new InlineKeyboard()
-              .text("Ethereum", "swap_select_chain_ethereum")
-              .text("Gnosis Chain", "swap_select_chain_gnosis")
-              .row()
-              .text("Sepolia (Testnet)", "swap_select_chain_sepolia")
-              .row()
-              .text("Arbitrum", "swap_select_chain_arbitrum")
-              .text("Base", "swap_select_chain_base"),
-          }
-        );
-        return;
-      }
-
-      // If wallet and chain are selected, ask for token based on action
-      if (action === "buy") {
-        await ctx.reply(
-          `Enter the token you want to buy (symbol, name, or address):`,
-          {
-            reply_markup: new InlineKeyboard().text("Cancel", "swap_cancel"),
-          }
-        );
-        ctx.session.swapStep = "enter_buy_token";
-      } else {
-        await ctx.reply(
-          `Enter the token you want to sell (symbol, name, or address):`,
-          {
-            reply_markup: new InlineKeyboard().text("Cancel", "swap_cancel"),
-          }
-        );
-        ctx.session.swapStep = "enter_sell_token";
-      }
+      // Log the message ID for debugging
+      logger.info(
+        `Sent swap type selection message with ID: ${message.message_id}`
+      );
+      logger.info(
+        `Swap type options presented to user for ${action}:`,
+        ctx.from?.id
+      );
     } catch (error) {
-      console.error("Error in swap action handler:", error);
-      await ctx.reply("Failed to handle swap action. Please try again.");
+      console.error(`Error in ${action} handler:`, error);
+      await ctx.reply(`Failed to start ${action} process. Please try again.`);
       clearSwapSession(ctx);
     }
   });
@@ -422,8 +331,9 @@ export function setupSwapHandlers(
     if (!ctx.session.swapStep) return;
 
     const step = ctx.session.swapStep;
-    const chainId = ctx.session.selectedChainId;
+    const chainId = ctx.session.selectedChainId || 11155111;
     const action = ctx.session.swapAction;
+    logger.info(`ChainID: ${chainId}, Action: ${action}`);
 
     if (!chainId || !action) {
       await ctx.reply("Please start the swap process again with /swap");
@@ -431,7 +341,7 @@ export function setupSwapHandlers(
       return;
     }
 
-    // Handle amount input
+    // Handle amount input for regular DEX swaps
     if (step === "enter_amount") {
       const amount = ctx.message.text.trim();
 
@@ -1140,78 +1050,29 @@ export function setupSwapHandlers(
       clearSwapSession(ctx);
       ctx.session.swapAction = "buy";
 
-      const userId = ctx.from?.id;
-      if (!userId) {
-        await ctx.reply("Could not identify your user ID. Please try again.");
-        return;
-      }
-
-      // Get the wallets (2 Ethereum, 1 Bitcoin)
-      const wallet1 = await walletService.createWalletFromTelegramId(
-        userId,
-        BlockchainType.ETHEREUM
+      // Log the current state to debug
+      logger.info(
+        `Starting buy flow for user: ${ctx.from?.id}, session: ${JSON.stringify(
+          ctx.session
+        )}`
       );
 
-      const wallet2 = await walletService.getUserWallet(
-        userId,
-        BlockchainType.ETHEREUM,
-        1
-      );
-
-      const wallet3 = await walletService.createWalletFromTelegramId(
-        userId,
-        BlockchainType.BITCOIN
-      );
-
-      // Format wallet addresses for display
-      const w1Address = await walletService.formatAddress(
-        wallet1.address,
-        BlockchainType.ETHEREUM
-      );
-      const w2Address = await walletService.formatAddress(
-        wallet2.address,
-        BlockchainType.ETHEREUM
-      );
-      const w3Address = await walletService.formatAddress(
-        wallet3.address,
-        BlockchainType.BITCOIN
-      );
-
-      // Store wallets in session for later use
-      ctx.session.availableWallets = {
-        w1: wallet1,
-        w2: wallet2,
-        w3: wallet3,
-      };
-
-      // For swaps, we can only use Ethereum wallets, so filter the options accordingly
-      const keyboard = new InlineKeyboard();
-
-      // Only show Ethereum wallets for swapping
-      if (wallet1.blockchainType === BlockchainType.ETHEREUM) {
-        keyboard.text("w1 (ETH)", "swap_select_wallet_0");
-      }
-
-      if (wallet2.blockchainType === BlockchainType.ETHEREUM) {
-        keyboard.text("w2 (ETH)", "swap_select_wallet_1");
-      }
-
-      if (wallet3.blockchainType === BlockchainType.ETHEREUM) {
-        keyboard.text("w3 (ETH)", "swap_select_wallet_2");
-      }
-
-      keyboard.row().text("Cancel", "swap_cancel");
-
-      await ctx.reply(
-        `Select which wallet to use for buying tokens:\n\n` +
-          `w1 (ETH): ${w1Address}\n` +
-          `w2 (ETH): ${w2Address}\n` +
-          `w3 (BTC): ${w3Address}\n\n` +
-          `Click on a wallet to select it. Only Ethereum wallets can be used for swaps.`,
+      // First, ask user to select swap type: DEX or Cross-chain
+      const message = await ctx.reply(
+        "Select the type of swap you want to perform:",
         {
-          reply_markup: keyboard,
+          reply_markup: new InlineKeyboard()
+            .text("DEX Swap (Same Chain)", "swap_select_chain_sepolia")
+            .row()
+            .text("Cross-chain Swap (BTC ↔ ETH)", "swap_type_cross_chain_buy"),
         }
       );
+
+      // Log the message ID for debugging
+      logger.info(
+        `Sent swap type selection message with ID: ${message.message_id}`
+      );
+      logger.info(`Swap type options presented to user for buy:`, ctx.from?.id);
     } catch (error) {
       console.error("Error in buy handler:", error);
       await ctx.reply("Failed to start buy process. Please try again.");
@@ -1229,6 +1090,41 @@ export function setupSwapHandlers(
       clearSwapSession(ctx);
       ctx.session.swapAction = "sell";
 
+      // First, ask user to select swap type: DEX or Cross-chain
+      const message = await ctx.reply(
+        "Select the type of swap you want to perform:",
+        {
+          reply_markup: new InlineKeyboard()
+            .text("DEX Swap (Same Chain)", "swap_select_chain_sepolia")
+            .row()
+            .text("Cross-chain Swap (BTC ↔ ETH)", "swap_type_cross_chain_sell"),
+        }
+      );
+
+      // Log the message ID for debugging
+      logger.info(
+        `Sent swap type selection message with ID: ${message.message_id}`
+      );
+      logger.info(
+        "Swap type options presented to user for sell:",
+        ctx.from?.id
+      );
+    } catch (error) {
+      console.error("Error in sell handler:", error);
+      await ctx.reply("Failed to start sell process. Please try again.");
+      clearSwapSession(ctx);
+    }
+  });
+
+  // Handle DEX swap type selection for sell
+  bot.callbackQuery("swap_type_dex_sell", async (ctx) => {
+    try {
+      // Acknowledge the callback query
+      await ctx.answerCallbackQuery();
+
+      // Store the selected swap type in session
+      ctx.session.swapType = "dex";
+
       const userId = ctx.from?.id;
       if (!userId) {
         await ctx.reply("Could not identify your user ID. Please try again.");
@@ -1252,20 +1148,6 @@ export function setupSwapHandlers(
         BlockchainType.BITCOIN
       );
 
-      // Format wallet addresses for display
-      const w1Address = await walletService.formatAddress(
-        wallet1.address,
-        BlockchainType.ETHEREUM
-      );
-      const w2Address = await walletService.formatAddress(
-        wallet2.address,
-        BlockchainType.ETHEREUM
-      );
-      const w3Address = await walletService.formatAddress(
-        wallet3.address,
-        BlockchainType.BITCOIN
-      );
-
       // Store wallets in session for later use
       ctx.session.availableWallets = {
         w1: wallet1,
@@ -1273,34 +1155,15 @@ export function setupSwapHandlers(
         w3: wallet3,
       };
 
-      // For swaps, we can only use Ethereum wallets, so filter the options accordingly
-      const keyboard = new InlineKeyboard();
-
-      // Only show Ethereum wallets for swapping
-      if (wallet1.blockchainType === BlockchainType.ETHEREUM) {
-        keyboard.text("w1 (ETH)", "swap_select_wallet_0");
-      }
-
-      if (wallet2.blockchainType === BlockchainType.ETHEREUM) {
-        keyboard.text("w2 (ETH)", "swap_select_wallet_1");
-      }
-
-      if (wallet3.blockchainType === BlockchainType.ETHEREUM) {
-        keyboard.text("w3 (ETH)", "swap_select_wallet_2");
-      }
-
-      keyboard.row().text("Cancel", "swap_cancel");
-
-      await ctx.reply(
-        `Select which wallet to use for selling tokens:\n\n` +
-          `w1 (ETH): ${w1Address}\n` +
-          `w2 (ETH): ${w2Address}\n` +
-          `w3 (BTC): ${w3Address}\n\n` +
-          `Click on a wallet to select it. Only Ethereum wallets can be used for swaps.`,
-        {
-          reply_markup: keyboard,
-        }
-      );
+      // Ask user to select a chain
+      await ctx.reply("Select the blockchain for your swap:", {
+        reply_markup: new InlineKeyboard()
+          .text("Ethereum", "swap_select_chain_ethereum")
+          .row()
+          .text("Sepolia (Testnet)", "swap_select_chain_sepolia")
+          .row()
+          .text("Cancel", "swap_cancel"),
+      });
     } catch (error) {
       console.error("Error in sell handler:", error);
       await ctx.reply("Failed to start sell process. Please try again.");
@@ -1308,28 +1171,65 @@ export function setupSwapHandlers(
     }
   });
 
-  // Handle /swap command
-  bot.command("swap", async (ctx) => {
+  // Handle cross-chain swap type selection for buy
+  bot.callbackQuery("swap_type_cross_chain_buy", async (ctx) => {
     try {
-      logger.info("Swap command received from user:", ctx.from?.id);
+      // Acknowledge the callback query
+      await ctx.answerCallbackQuery();
 
-      // Clear any existing swap session
-      clearSwapSession(ctx);
+      // Store the selected swap type and action in session
+      ctx.session.swapType = "cross_chain";
+      ctx.session.swapAction = "buy";
 
-      // First, ask user to select swap type: DEX or Cross-chain
-      await ctx.reply("Select the type of swap you want to perform:", {
+      // For cross-chain swaps, ask for direction
+      await ctx.reply("Select the direction of your cross-chain swap:", {
         reply_markup: new InlineKeyboard()
-          .text("DEX Swap (Same Chain)", "swap_type_dex")
+          .text("ETH → BTC", "swap_cross_direction_eth_btc")
           .row()
-          .text("Cross-chain Swap (BTC ↔ ETH)", "swap_type_cross_chain"),
+          .text("BTC → ETH", "swap_cross_direction_btc_eth")
+          .row()
+          .text("Cancel", "swap_cancel"),
       });
 
-      logger.info("Swap options presented to user:", ctx.from?.id);
-    } catch (error) {
-      console.error("Error in swap command:", error);
-      await ctx.reply(
-        "An error occurred while setting up the swap. Please try again."
+      logger.info(
+        "Cross-chain direction options presented to user:",
+        ctx.from?.id
       );
+    } catch (error) {
+      console.error("Error setting up cross-chain buy:", error);
+      await ctx.reply("Failed to set up cross-chain swap. Please try again.");
+      clearSwapSession(ctx);
+    }
+  });
+
+  // Handle cross-chain swap type selection for sell
+  bot.callbackQuery("swap_type_cross_chain_sell", async (ctx) => {
+    try {
+      // Acknowledge the callback query
+      await ctx.answerCallbackQuery();
+
+      // Store the selected swap type and action in session
+      ctx.session.swapType = "cross_chain";
+      ctx.session.swapAction = "sell";
+
+      // For cross-chain swaps, ask for direction
+      await ctx.reply("Select the direction of your cross-chain swap:", {
+        reply_markup: new InlineKeyboard()
+          .text("ETH → BTC", "swap_cross_direction_eth_btc")
+          .row()
+          .text("BTC → ETH", "swap_cross_direction_btc_eth")
+          .row()
+          .text("Cancel", "swap_cancel"),
+      });
+
+      logger.info(
+        "Cross-chain direction options presented to user:",
+        ctx.from?.id
+      );
+    } catch (error) {
+      console.error("Error setting up cross-chain sell:", error);
+      await ctx.reply("Failed to set up cross-chain swap. Please try again.");
+      clearSwapSession(ctx);
     }
   });
 
@@ -1470,9 +1370,17 @@ export function setupSwapHandlers(
     // Handle different swap steps
     const step = ctx.session.swapStep;
 
+    logger.info(
+      `Processing message for step: ${step}, text: ${ctx.message.text}`
+    );
+
     if (step === "enter_cross_chain_amount") {
       const amountText = ctx.message.text.trim();
       const amount = parseFloat(amountText);
+
+      logger.info(
+        `Cross-chain amount entered: ${amountText}, parsed: ${amount}`
+      );
 
       // Validate amount
       if (isNaN(amount) || amount <= 0) {
@@ -1495,6 +1403,12 @@ export function setupSwapHandlers(
       const toChain = ctx.session.toChain;
       const direction = ctx.session.crossChainDirection;
 
+      logger.info(`Cross-chain swap details: 
+        Direction: ${direction}
+        From: ${fromChain} (${sourceWallet?.address?.substring(0, 10)}...)
+        To: ${toChain} (${destinationWallet?.address?.substring(0, 10)}...)
+        Amount: ${amountText}`);
+
       if (
         !sourceWallet ||
         !destinationWallet ||
@@ -1502,6 +1416,13 @@ export function setupSwapHandlers(
         !toChain ||
         !direction
       ) {
+        logger.error(`Missing cross-chain swap information: 
+          sourceWallet: ${!!sourceWallet}
+          destinationWallet: ${!!destinationWallet}
+          fromChain: ${fromChain}
+          toChain: ${toChain}
+          direction: ${direction}`);
+
         await ctx.reply(
           "Missing swap information. Please start again with /swap"
         );
@@ -1529,6 +1450,8 @@ export function setupSwapHandlers(
 
       confirmationMessage += `Do you want to proceed with this swap?`;
 
+      logger.info(`Sending cross-chain confirmation message`);
+
       await ctx.reply(confirmationMessage, {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
@@ -1536,7 +1459,6 @@ export function setupSwapHandlers(
           .text("Cancel", "swap_cancel"),
       });
     }
-    // Handle other existing swap steps...
   });
 
   // Handle cross-chain swap confirmation

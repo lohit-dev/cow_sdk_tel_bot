@@ -14,7 +14,7 @@ const consoleFormat = winston.format.combine(
   winston.format.printf(({ level, message, timestamp, ...metadata }) => {
     let msg = `${timestamp} [${level}]: ${message}`;
     if (Object.keys(metadata).length > 0) {
-      msg += JSON.stringify(metadata, null, 2);
+      msg += " at " + JSON.stringify(metadata, null, 2);
     }
     return msg;
   })
