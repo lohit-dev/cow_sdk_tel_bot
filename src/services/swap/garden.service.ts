@@ -6,16 +6,19 @@ import {
   SwapParams,
 } from "@gardenfi/core";
 import { Asset, SupportedAssets } from "@gardenfi/orderbook";
-import { DigestKey, Environment } from "@gardenfi/utils";
-import { Bot } from "grammy";
+import { DigestKey, Environment, Network } from "@gardenfi/utils";
+import { Bot, CallbackQueryContext } from "grammy";
 import { BotContext } from "../telegram/telegram.service";
 import logger from "../../utils/logger";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { arbitrumSepolia, sepolia } from "viem/chains";
-import { CONFIG } from "../../config";
-import { ethers } from "ethers";
+import { sepolia } from "viem/chains";
 import { BlockchainType } from "../../types";
+import {
+  BitcoinNetwork,
+  BitcoinProvider,
+  BitcoinWallet,
+} from "@catalogfi/wallets";
 
 export interface WalletData {
   address: string;
@@ -64,7 +67,10 @@ export class GardenService {
     this.environment = Environment.TESTNET;
 
     // Generate a random digest key
-    this.digestKey = DigestKey.generateRandom().val?.digestKey!;
+    // @ts-ignore
+    if (!this.digestKey) {
+      this.digestKey = DigestKey.generateRandom().val?.digestKey!;
+    }
 
     // Initialize Garden instance
     this.initGarden();
@@ -81,12 +87,15 @@ export class GardenService {
       // Initialize Garden with the digest key but without wallets
       // We'll add wallets dynamically when needed
       this.garden = Garden.fromWallets({
-        environment: this.environment,
+        environment: Environment.TESTNET,
         digestKey: this.digestKey,
         wallets: {},
       });
 
       logger.info("Garden instance initialized successfully");
+
+      // Start the execution loop to handle redeems and refunds
+      this.startExecutionLoop();
     } catch (error) {
       logger.error("Failed to initialize Garden instance:", error);
       throw error;
@@ -94,20 +103,47 @@ export class GardenService {
   }
 
   /**
+   * Start the execution loop for handling redeems and refunds
+   */
+  private startExecutionLoop() {
+    // Run the execute function in the background
+    this.executeGarden();
+
+    // Set up a recurring timer to ensure execute keeps running
+    setInterval(() => {
+      this.executeGarden();
+    }, 5 * 60 * 1000); // Check every 5 minutes
+  }
+
+  /**
+   * Execute Garden to handle redeems and refunds
+   */
+  private async executeGarden() {
+    try {
+      await this.garden.execute();
+    } catch (error) {
+      logger.error("Error in Garden execution loop:", error);
+    }
+  }
+
+  /**
    * Set up event listeners for Garden
    */
   private setupEventListeners() {
-    if (this.listenersInitialized) return;
+    if (this.listenersInitialized) {
+      return;
+    }
 
+    // Listen for error events
     this.garden.on("error", (order, error) => {
+      const userId = this.orderUserMap.get(order.create_order.create_id);
       logger.error(
-        `Garden error for order ID: ${order.create_order.create_id}`,
+        `Error occurred for order ID: ${order.create_order.create_id}, Details:`,
         error
       );
 
-      // Notify user about the error if we have their ID
-      const userId = this.orderUserMap.get(order.create_order.create_id);
-      if (userId) {
+      // Notify the user if we have their ID
+      if (userId && this.bot) {
         this.bot.api
           .sendMessage(
             userId,
@@ -121,13 +157,13 @@ export class GardenService {
       }
     });
 
+    // Listen for success events
     this.garden.on("success", async (order, action, txHash) => {
+      const userId = this.orderUserMap.get(order.create_order.create_id);
       logger.info(
-        `Garden success for order ID: ${order.create_order.create_id}, Action: ${action}, TxHash: ${txHash}`
+        `Success: Order ${order.create_order.create_id} ${action} ${txHash}`
       );
 
-      // Notify user about the success if we have their ID
-      const userId = this.orderUserMap.get(order.create_order.create_id);
       if (userId) {
         // Format message based on action type
         let message = "";
@@ -141,13 +177,9 @@ export class GardenService {
         }
 
         if (message) {
-          this.bot.api
-            .sendMessage(userId, message, {
-              parse_mode: "Markdown",
-            })
-            .catch((err) => {
-              logger.error("Failed to send success notification to user:", err);
-            });
+          await this.bot.api.sendMessage(userId, message).catch((err) => {
+            logger.error("Failed to send success notification to user:", err);
+          });
         }
       }
     });
@@ -213,6 +245,7 @@ export class GardenService {
    * Execute a swap between Bitcoin and EVM chains
    */
   public async executeSwap(
+    ctx: CallbackQueryContext<BotContext>,
     userId: number,
     fromChain: BlockchainType,
     toChain: BlockchainType,
@@ -316,6 +349,9 @@ export class GardenService {
 
       const [strategyId, receiveAmount] = quotes[0];
 
+      const isFromBitcoin = fromAsset.chain.includes("bitcoin");
+      const isToBitcoin = toAsset.chain.includes("bitcoin");
+
       // Prepare swap parameters
       const swapParams: SwapParams = {
         fromAsset,
@@ -323,13 +359,17 @@ export class GardenService {
         sendAmount,
         receiveAmount: receiveAmount.toString(),
         additionalData: {
-          strategyId,
-          // Add BTC address if destination is Bitcoin
-          ...(toChain === BlockchainType.BITCOIN && btcAddress
-            ? { btcAddress }
+          strategyId: strategyId,
+          // For Bitcoin to EVM or EVM to Bitcoin swaps, we need to provide the btcAddress
+          // For Bitcoin to EVM, btcAddress is used as the refund address (in case swap fails)
+          // For EVM to Bitcoin, btcAddress is used as the destination address
+          ...(isFromBitcoin || isToBitcoin
+            ? { btcAddress: btcAddress || "" }
             : {}),
         },
       };
+
+      logger.info(`Using BTC address for swap: ${btcAddress}`);
 
       // Execute the swap
       logger.info("Creating swap with params:", swapParams);
@@ -378,13 +418,20 @@ export class GardenService {
       let depositAddress = undefined;
 
       if (isBitcoinSource) {
-        // Get the deposit address for Bitcoin source
-        depositAddress = order.create_order.initiator_destination_address;
+        const btc_wallet = ctx.session.destinationWallet;
+        const btcWallet = BitcoinWallet.fromPrivateKey(
+          btc_wallet?.privateKey!,
+          new BitcoinProvider(BitcoinNetwork.Testnet)
+        );
+
+        btcWallet.send(swapResult.val.source_swap.swap_id, Number(sendAmount));
       }
 
       return {
         success: true,
-        message: "Swap created successfully",
+        message: isBitcoinSource
+          ? `Swap initiated successfully. Please send ${sendAmount} BTC to the deposit address.`
+          : `Swap initiated successfully. Transaction hash: ${txHash}`,
         orderId,
         depositAddress,
         txHash,
@@ -405,9 +452,7 @@ export class GardenService {
       logger.error("Error executing swap:", error);
       return {
         success: false,
-        message: `Error executing swap: ${
-          (error as Error).message || JSON.stringify(error)
-        }`,
+        message: `Failed to execute swap: ${error}`,
         error,
       };
     }
@@ -415,4 +460,4 @@ export class GardenService {
 }
 
 // Export a singleton instance
-export const gardenService = new GardenService(null as any); // Will be initialized properly in index.ts
+export const gardenService = new GardenService(null as any);

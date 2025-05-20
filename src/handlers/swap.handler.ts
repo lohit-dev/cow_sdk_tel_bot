@@ -325,198 +325,292 @@ export function setupSwapHandlers(
     }
   });
 
-  // Handle amount input
+  // Handle all text input for swaps in a single handler
   bot.on("message:text", async (ctx) => {
     // Skip if not in a swap flow
     if (!ctx.session.swapStep) return;
 
     const step = ctx.session.swapStep;
-    const chainId = ctx.session.selectedChainId || 11155111;
-    const action = ctx.session.swapAction;
-    logger.info(`ChainID: ${chainId}, Action: ${action}`);
+    logger.info(
+      `Processing message for step: ${step}, text: ${ctx.message.text}`
+    );
 
-    if (!chainId || !action) {
-      await ctx.reply("Please start the swap process again with /swap");
-      clearSwapSession(ctx);
-      return;
-    }
+    // Handle different swap steps with switch/case
+    switch (step) {
+      case "enter_amount": {
+        // Handle amount input for regular DEX swaps
+        const amount = ctx.message.text.trim();
 
-    // Handle amount input for regular DEX swaps
-    if (step === "enter_amount") {
-      const amount = ctx.message.text.trim();
-
-      // Validate amount
-      if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
-        await ctx.reply("Please enter a valid amount greater than 0.");
-        return;
-      }
-
-      // Store the amount in session
-      ctx.session.amount = amount;
-
-      // Show swap confirmation instead of asking for tokens again
-      const buyToken = ctx.session.buyToken;
-      const sellToken = ctx.session.sellToken;
-
-      if (!buyToken || !sellToken) {
-        await ctx.reply(
-          "Missing token information. Please start the swap process again."
-        );
-        clearSwapSession(ctx);
-        return;
-      }
-
-      // Show swap confirmation
-      await ctx.reply(
-        `Ready to swap ${amount} ${sellToken.symbol} for ${buyToken.symbol}.\n\n` +
-          `Confirm this swap?`,
-        {
-          reply_markup: new InlineKeyboard()
-            .text("Confirm", "swap_confirm")
-            .text("Cancel", "swap_cancel"),
-        }
-      );
-
-      // Set the next step to confirmation
-      ctx.session.swapStep = "confirm";
-    }
-    // Handle sell token input
-    else if (step === "enter_sell_token") {
-      const tokenQuery = ctx.message.text.trim();
-
-      // Search for the token
-      const tokens = tokenService.searchTokens(tokenQuery, chainId);
-
-      if (tokens.length === 0) {
-        await ctx.reply(
-          `Token "${tokenQuery}" not found. Please try another token.`
-        );
-        return;
-      }
-
-      // If multiple tokens found, let the user select one
-      if (tokens.length > 1) {
-        const keyboard = new InlineKeyboard();
-
-        tokens.slice(0, 5).forEach((token) => {
-          keyboard.text(
-            `${token.symbol} (${token.name})`,
-            `swap_select_sell_token_${token.address}`
-          );
-          keyboard.row();
-        });
-
-        await ctx.reply(
-          `Multiple tokens found for "${tokenQuery}". Please select one:`,
-          { reply_markup: keyboard }
-        );
-        return;
-      }
-
-      // If only one token found, use it directly
-      const token = tokens[0];
-      ctx.session.sellToken = token;
-
-      // If we're in buy flow and already have a buy token, go to amount
-      if (ctx.session.swapAction === "buy" && ctx.session.buyToken) {
-        const buyToken = ctx.session.buyToken;
-
-        // Check if the buy token is the same as the sell token
-        if (token.address.toLowerCase() === buyToken.address.toLowerCase()) {
-          await ctx.reply(
-            "You cannot swap a token for itself. Please select a different token."
-          );
+        // Validate amount
+        if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+          await ctx.reply("Please enter a valid amount greater than 0.");
           return;
         }
 
-        // Ask for the amount
-        await ctx.reply(
-          `You selected ${token.symbol} (${token.name}) as the token to sell and ${buyToken.symbol} (${buyToken.name}) as the token to buy.\n\n` +
-            `Enter the amount of ${token.symbol} you want to swap:`,
-          { parse_mode: "Markdown" }
-        );
+        // Store the amount in session
+        ctx.session.amount = amount;
 
-        // Set the next step to handle amount input
-        ctx.session.swapStep = "enter_amount";
-        return;
-      }
-
-      // If we're in sell flow, ask for buy token
-      await ctx.reply(
-        `You selected ${token.symbol} (${token.name}) as the token to sell.\n\n` +
-          `Now enter the token you want to buy (symbol, name, or address):`
-      );
-
-      ctx.session.swapStep = "enter_buy_token";
-    }
-    // Handle buy token input
-    else if (step === "enter_buy_token") {
-      const tokenQuery = ctx.message.text.trim();
-
-      // Search for the token
-      const tokens = tokenService.searchTokens(tokenQuery, chainId);
-
-      if (tokens.length === 0) {
-        await ctx.reply(
-          `Token "${tokenQuery}" not found. Please try another token.`
-        );
-        return;
-      }
-
-      // If multiple tokens found, let the user select one
-      if (tokens.length > 1) {
-        const keyboard = new InlineKeyboard();
-
-        tokens.slice(0, 5).forEach((token) => {
-          keyboard.text(
-            `${token.symbol} (${token.name})`,
-            `swap_select_buy_token_${token.address}`
-          );
-          keyboard.row();
-        });
-
-        await ctx.reply(
-          `Multiple tokens found for "${tokenQuery}". Please select one:`,
-          { reply_markup: keyboard }
-        );
-        return;
-      }
-
-      // If only one token found, use it directly
-      const token = tokens[0];
-      ctx.session.buyToken = token;
-
-      // If we're in sell flow and already have a sell token, go to amount
-      if (ctx.session.swapAction === "sell" && ctx.session.sellToken) {
+        // Show swap confirmation instead of asking for tokens again
+        const buyToken = ctx.session.buyToken;
         const sellToken = ctx.session.sellToken;
 
-        // Check if the buy token is the same as the sell token
-        if (token.address.toLowerCase() === sellToken.address.toLowerCase()) {
+        if (!buyToken || !sellToken) {
           await ctx.reply(
-            "You cannot swap a token for itself. Please select a different token."
+            "Missing token information. Please start the swap process again."
+          );
+          clearSwapSession(ctx);
+          return;
+        }
+
+        // Show swap confirmation
+        await ctx.reply(
+          `Ready to swap ${amount} ${sellToken.symbol} for ${buyToken.symbol}.\n\n` +
+            `Confirm this swap?`,
+          {
+            reply_markup: new InlineKeyboard()
+              .text("Confirm", "swap_confirm")
+              .text("Cancel", "swap_cancel"),
+          }
+        );
+
+        // Set the next step to confirmation
+        ctx.session.swapStep = "confirm";
+        break;
+      }
+
+      case "enter_cross_chain_amount": {
+        // Handle cross-chain amount input
+        const amountText = ctx.message.text.trim();
+        const amount = parseFloat(amountText);
+
+        logger.info(
+          `Cross-chain amount entered: ${amountText}, parsed: ${amount}`
+        );
+
+        // Validate amount
+        if (isNaN(amount) || amount <= 0) {
+          await ctx.reply(
+            "Please enter a valid positive number for the amount.",
+            {
+              reply_markup: new InlineKeyboard().text("Cancel", "swap_cancel"),
+            }
           );
           return;
         }
 
-        // Ask for the amount
-        await ctx.reply(
-          `You selected ${sellToken.symbol} (${sellToken.name}) as the token to sell and ${token.symbol} (${token.name}) as the token to buy.\n\n` +
-            `Enter the amount of ${sellToken.symbol} you want to swap:`,
-          { parse_mode: "Markdown" }
-        );
+        // Store the amount in session
+        ctx.session.crossChainAmount = amountText;
 
-        // Set the next step to handle amount input
-        ctx.session.swapStep = "enter_amount";
-        return;
+        // Get the source and destination wallets from session
+        const sourceWallet = ctx.session.sourceWallet;
+        const destinationWallet = ctx.session.destinationWallet;
+        const fromChain = ctx.session.fromChain;
+        const toChain = ctx.session.toChain;
+        const direction = ctx.session.crossChainDirection;
+
+        logger.info(`Cross-chain swap details: 
+          Direction: ${direction}
+          From: ${fromChain} (${sourceWallet?.address?.substring(0, 10)}...)
+          To: ${toChain} (${destinationWallet?.address?.substring(0, 10)}...)
+          Amount: ${amountText}`);
+
+        if (
+          !sourceWallet ||
+          !destinationWallet ||
+          !fromChain ||
+          !toChain ||
+          !direction
+        ) {
+          logger.error(`Missing cross-chain swap information: 
+            sourceWallet: ${!!sourceWallet}
+            destinationWallet: ${!!destinationWallet}
+            fromChain: ${fromChain}
+            toChain: ${toChain}
+            direction: ${direction}`);
+
+          await ctx.reply(
+            "Missing swap information. Please start again with /swap"
+          );
+          clearSwapSession(ctx);
+          return;
+        }
+
+        // Determine asset symbols based on chains
+        const fromAssetSymbol =
+          fromChain === BlockchainType.ETHEREUM ? "WBTC" : "BTC";
+        const toAssetSymbol =
+          toChain === BlockchainType.ETHEREUM ? "WBTC" : "BTC";
+
+        // Show confirmation message
+        let confirmationMessage = `📝 **Cross-chain Swap Summary**\n\n`;
+        confirmationMessage += `From: ${fromAssetSymbol} (${fromChain})\n`;
+        confirmationMessage += `To: ${toAssetSymbol} (${toChain})\n`;
+        confirmationMessage += `Amount: ${amountText} ${
+          fromChain === BlockchainType.ETHEREUM ? "ETH" : "BTC"
+        }\n\n`;
+
+        if (direction === "btc_eth") {
+          confirmationMessage += `ℹ️ For BTC → ETH swaps, you'll need to send BTC to a deposit address that will be provided after confirmation.\n\n`;
+        }
+
+        confirmationMessage += `Do you want to proceed with this swap?`;
+
+        logger.info(`Sending cross-chain confirmation message`);
+
+        await ctx.reply(confirmationMessage, {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .text("Confirm", "swap_cross_chain_confirm")
+            .text("Cancel", "swap_cancel"),
+        });
+        break;
       }
 
-      // If we're in buy flow, ask for sell token
-      await ctx.reply(
-        `You selected ${token.symbol} (${token.name}) as the token to buy.\n\n` +
-          `Now enter the token you want to sell (symbol, name, or address):`
-      );
+      case "enter_sell_token": {
+        const tokenQuery = ctx.message.text.trim();
+        const chainId = ctx.session.selectedChainId || 11155111;
 
-      ctx.session.swapStep = "enter_sell_token";
+        // Search for the token
+        const tokens = tokenService.searchTokens(tokenQuery, chainId);
+
+        if (tokens.length === 0) {
+          await ctx.reply(
+            `Token "${tokenQuery}" not found. Please try another token.`
+          );
+          return;
+        }
+
+        // If multiple tokens found, let the user select one
+        if (tokens.length > 1) {
+          const keyboard = new InlineKeyboard();
+
+          tokens.slice(0, 5).forEach((token) => {
+            keyboard.text(
+              `${token.symbol} (${token.name})`,
+              `swap_select_sell_token_${token.address}`
+            );
+            keyboard.row();
+          });
+
+          await ctx.reply(
+            `Multiple tokens found for "${tokenQuery}". Please select one:`,
+            { reply_markup: keyboard }
+          );
+          return;
+        }
+
+        // If only one token found, use it directly
+        const token = tokens[0];
+        ctx.session.sellToken = token;
+
+        // If we're in buy flow and already have a buy token, go to amount
+        if (ctx.session.swapAction === "buy" && ctx.session.buyToken) {
+          const buyToken = ctx.session.buyToken;
+
+          // Check if the buy token is the same as the sell token
+          if (token.address.toLowerCase() === buyToken.address.toLowerCase()) {
+            await ctx.reply(
+              "You cannot swap a token for itself. Please select a different token."
+            );
+            return;
+          }
+
+          // Ask for the amount
+          await ctx.reply(
+            `You selected ${token.symbol} (${token.name}) as the token to sell and ${buyToken.symbol} (${buyToken.name}) as the token to buy.\n\n` +
+              `Enter the amount of ${token.symbol} you want to swap:`,
+            { parse_mode: "Markdown" }
+          );
+
+          // Set the next step to handle amount input
+          ctx.session.swapStep = "enter_amount";
+          return;
+        }
+
+        // If we're in sell flow, ask for buy token
+        await ctx.reply(
+          `You selected ${token.symbol} (${token.name}) as the token to sell.\n\n` +
+            `Now enter the token you want to buy (symbol, name, or address):`
+        );
+
+        ctx.session.swapStep = "enter_buy_token";
+        break;
+      }
+
+      case "enter_buy_token": {
+        const tokenQuery = ctx.message.text.trim();
+        const chainId = ctx.session.selectedChainId || 11155111;
+
+        // Search for the token
+        const tokens = tokenService.searchTokens(tokenQuery, chainId);
+
+        if (tokens.length === 0) {
+          await ctx.reply(
+            `Token "${tokenQuery}" not found. Please try another token.`
+          );
+          return;
+        }
+
+        // If multiple tokens found, let the user select one
+        if (tokens.length > 1) {
+          const keyboard = new InlineKeyboard();
+
+          tokens.slice(0, 5).forEach((token) => {
+            keyboard.text(
+              `${token.symbol} (${token.name})`,
+              `swap_select_buy_token_${token.address}`
+            );
+            keyboard.row();
+          });
+
+          await ctx.reply(
+            `Multiple tokens found for "${tokenQuery}". Please select one:`,
+            { reply_markup: keyboard }
+          );
+          return;
+        }
+
+        // If only one token found, use it directly
+        const token = tokens[0];
+        ctx.session.buyToken = token;
+
+        // If we're in sell flow and already have a sell token, go to amount
+        if (ctx.session.swapAction === "sell" && ctx.session.sellToken) {
+          const sellToken = ctx.session.sellToken;
+
+          // Check if the buy token is the same as the sell token
+          if (token.address.toLowerCase() === sellToken.address.toLowerCase()) {
+            await ctx.reply(
+              "You cannot swap a token for itself. Please select a different token."
+            );
+            return;
+          }
+
+          // Ask for the amount
+          await ctx.reply(
+            `You selected ${sellToken.symbol} (${sellToken.name}) as the token to sell and ${token.symbol} (${token.name}) as the token to buy.\n\n` +
+              `Enter the amount of ${sellToken.symbol} you want to swap:`,
+            { parse_mode: "Markdown" }
+          );
+
+          // Set the next step to handle amount input
+          ctx.session.swapStep = "enter_amount";
+          return;
+        }
+
+        // If we're in buy flow, ask for sell token
+        await ctx.reply(
+          `You selected ${token.symbol} (${token.name}) as the token to buy.\n\n` +
+            `Now enter the token you want to sell (symbol, name, or address):`
+        );
+
+        ctx.session.swapStep = "enter_sell_token";
+        break;
+      }
+
+      default:
+        logger.warn(`Unhandled swap step: ${step}`);
+        break;
     }
   });
 
@@ -1360,107 +1454,6 @@ export function setupSwapHandlers(
     }
   });
 
-  // Handle text input for cross-chain swap amount
-  bot.on("message:text", async (ctx) => {
-    // Skip if not in a swap session or not at the right step
-    if (!ctx.session.swapStep) {
-      return;
-    }
-
-    // Handle different swap steps
-    const step = ctx.session.swapStep;
-
-    logger.info(
-      `Processing message for step: ${step}, text: ${ctx.message.text}`
-    );
-
-    if (step === "enter_cross_chain_amount") {
-      const amountText = ctx.message.text.trim();
-      const amount = parseFloat(amountText);
-
-      logger.info(
-        `Cross-chain amount entered: ${amountText}, parsed: ${amount}`
-      );
-
-      // Validate amount
-      if (isNaN(amount) || amount <= 0) {
-        await ctx.reply(
-          "Please enter a valid positive number for the amount.",
-          {
-            reply_markup: new InlineKeyboard().text("Cancel", "swap_cancel"),
-          }
-        );
-        return;
-      }
-
-      // Store the amount in session
-      ctx.session.crossChainAmount = amountText;
-
-      // Get the source and destination wallets from session
-      const sourceWallet = ctx.session.sourceWallet;
-      const destinationWallet = ctx.session.destinationWallet;
-      const fromChain = ctx.session.fromChain;
-      const toChain = ctx.session.toChain;
-      const direction = ctx.session.crossChainDirection;
-
-      logger.info(`Cross-chain swap details: 
-        Direction: ${direction}
-        From: ${fromChain} (${sourceWallet?.address?.substring(0, 10)}...)
-        To: ${toChain} (${destinationWallet?.address?.substring(0, 10)}...)
-        Amount: ${amountText}`);
-
-      if (
-        !sourceWallet ||
-        !destinationWallet ||
-        !fromChain ||
-        !toChain ||
-        !direction
-      ) {
-        logger.error(`Missing cross-chain swap information: 
-          sourceWallet: ${!!sourceWallet}
-          destinationWallet: ${!!destinationWallet}
-          fromChain: ${fromChain}
-          toChain: ${toChain}
-          direction: ${direction}`);
-
-        await ctx.reply(
-          "Missing swap information. Please start again with /swap"
-        );
-        clearSwapSession(ctx);
-        return;
-      }
-
-      // Determine asset symbols based on chains
-      const fromAssetSymbol =
-        fromChain === BlockchainType.ETHEREUM ? "WBTC" : "BTC";
-      const toAssetSymbol =
-        toChain === BlockchainType.ETHEREUM ? "WBTC" : "BTC";
-
-      // Show confirmation message
-      let confirmationMessage = `📝 **Cross-chain Swap Summary**\n\n`;
-      confirmationMessage += `From: ${fromAssetSymbol} (${fromChain})\n`;
-      confirmationMessage += `To: ${toAssetSymbol} (${toChain})\n`;
-      confirmationMessage += `Amount: ${amountText} ${
-        fromChain === BlockchainType.ETHEREUM ? "ETH" : "BTC"
-      }\n\n`;
-
-      if (direction === "btc_eth") {
-        confirmationMessage += `ℹ️ For BTC → ETH swaps, you'll need to send BTC to a deposit address that will be provided after confirmation.\n\n`;
-      }
-
-      confirmationMessage += `Do you want to proceed with this swap?`;
-
-      logger.info(`Sending cross-chain confirmation message`);
-
-      await ctx.reply(confirmationMessage, {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard()
-          .text("Confirm", "swap_cross_chain_confirm")
-          .text("Cancel", "swap_cancel"),
-      });
-    }
-  });
-
   // Handle cross-chain swap confirmation
   bot.callbackQuery("swap_cross_chain_confirm", async (ctx) => {
     // Acknowledge the callback query
@@ -1507,6 +1500,7 @@ export function setupSwapHandlers(
 
       // Execute the swap
       const result = await gardenService.executeSwap(
+        ctx,
         userId,
         fromChain,
         toChain,

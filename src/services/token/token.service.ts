@@ -11,7 +11,6 @@ export class TokenService {
     // Initialize token lists
     this.tokensByChain = {
       11155111: sepoliaTokens.tokens, // Sepolia
-      // Add other chains as needed
     };
   }
 
