@@ -3,6 +3,7 @@ import { BlockchainType } from "../types";
 import { BotContext } from "../services/telegram/telegram.service";
 import path from "path";
 import fs from "fs";
+import { TokenService } from "../services/token/token.service";
 
 export function clearSwapSession(ctx: BotContext) {
   ctx.session.swapStep = undefined;
@@ -39,13 +40,8 @@ export const chainIdMap: Record<string, SupportedChainId> = {
 export function loadTokens(blockchain: BlockchainType): any[] {
   try {
     if (blockchain === BlockchainType.ETHEREUM) {
-      const filePath = path.join(
-        __dirname,
-        "../data/tokens/testnet/sepolia.json"
-      );
-      const fileContent = fs.readFileSync(filePath, "utf8");
-      const tokenData = JSON.parse(fileContent);
-      return tokenData.tokens || [];
+      const tokenService = new TokenService();
+      return tokenService.searchTokens("", 11155111);
     }
     return [];
   } catch (error) {

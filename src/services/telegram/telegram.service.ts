@@ -9,11 +9,21 @@ import {
 } from "../../types";
 
 // Define session structure
-interface SessionData {
+type SessionData = {
   walletIndex: number;
   activeTokens?: { sell?: string; buy?: string };
   orderStep?: string;
   orderData?: Record<string, string>;
+
+  // UniSwap session properties
+  uniSwap?: {
+    step?: string;
+    wallet?: Wallet;
+    sellToken?: TokenInfo;
+    buyToken?: TokenInfo;
+    amount?: string;
+    chainId?: number;
+  };
 
   // Swap session properties from SwapSession
   swapStep?: string;
@@ -52,7 +62,7 @@ interface SessionData {
   action?: string;
   chainId?: number;
   orderId?: string;
-}
+};
 
 export type BotContext = Context & SessionFlavor<SessionData>;
 
