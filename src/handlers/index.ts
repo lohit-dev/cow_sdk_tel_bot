@@ -1,14 +1,11 @@
 import { Bot } from "grammy";
 import { BotContext } from "../services/telegram/telegram.service";
-// import { setupUniHandlers } from "./uni.handler";
-import { walletService } from "../services/telegram/wallet.service";
-import { setupSwapHandlers } from "./swap.handler";
-import { setupWalletHandlers } from "./wallet.handler";
+import { setUpCommands } from "./commands";
+import { setUpCallbacks } from "./callbacks";
 
 export function setupHandlers(bot: Bot<BotContext>) {
-  setupWalletHandlers(bot as any);
-  setupSwapHandlers(bot as any, walletService);
-  // setupUniHandlers(bot as any, walletService);
+  setUpCommands(bot);
+  setUpCallbacks(bot);
 
   bot.catch((err) => {
     console.error("Bot error occurred:", err);

@@ -1,9 +1,7 @@
 import { SupportedChainId } from "@cowprotocol/cow-sdk";
 import { BlockchainType } from "../types";
 import { BotContext } from "../services/telegram/telegram.service";
-import path from "path";
-import fs from "fs";
-import { TokenService } from "../services/token/token.service";
+import { tokenService } from "../services/token/token.service";
 
 export function clearSwapSession(ctx: BotContext) {
   ctx.session.swapStep = undefined;
@@ -27,6 +25,17 @@ export function clearSwapSession(ctx: BotContext) {
   ctx.session.chainId = undefined;
   ctx.session.orderId = undefined;
 }
+// Simple session clearing helper
+export const clearUniSession = (ctx: BotContext) => {
+  ctx.session.uniSwap = {
+    step: undefined,
+    wallet: undefined,
+    sellToken: undefined,
+    buyToken: undefined,
+    amount: undefined,
+    chainId: undefined,
+  };
+};
 
 export const chainIdMap: Record<string, SupportedChainId> = {
   sepolia: SupportedChainId.SEPOLIA,
@@ -40,7 +49,6 @@ export const chainIdMap: Record<string, SupportedChainId> = {
 export function loadTokens(blockchain: BlockchainType): any[] {
   try {
     if (blockchain === BlockchainType.ETHEREUM) {
-      const tokenService = new TokenService();
       return tokenService.searchTokens("", 11155111);
     }
     return [];

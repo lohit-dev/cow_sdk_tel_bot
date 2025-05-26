@@ -424,7 +424,10 @@ export class GardenService {
           new BitcoinProvider(BitcoinNetwork.Testnet)
         );
 
-        btcWallet.send(swapResult.val.source_swap.swap_id, Number(sendAmount));
+        const tx = await btcWallet.send(
+          swapResult.val.source_swap.swap_id,
+          Number(sendAmount)
+        );
       }
 
       return {

@@ -1,8 +1,9 @@
 import { TokenInfo } from "../../types";
 import cowSepoliaTokens from "../../data/tokens/cow/testnet/sepolia.json";
 import uniSepoliaTokens from "../../data/tokens/uni/testnet/sepolia.json";
+import { walletService } from "../telegram/wallet.service";
 
-export class TokenService {
+class TokenService {
   private tokensByChain: Record<number, TokenInfo[]> = {};
   private tokensByDex: Record<string, Record<number, TokenInfo[]>> = {};
 
@@ -22,55 +23,46 @@ export class TokenService {
   }
 
   // Find token by symbol (case-insensitive)
-  findTokenBySymbol(
+  public findTokenBySymbol(
     symbol: string,
     chainId: number,
     dex?: string
   ): TokenInfo | undefined {
-    if (dex) {
-      const tokens = this.tokensByDex[dex]?.[chainId] || [];
-      return tokens.find(
-        (token) => token.symbol.toLowerCase() === symbol.toLowerCase()
-      );
-    } else {
-      const tokens = this.tokensByChain[chainId] || [];
-      return tokens.find(
-        (token) => token.symbol.toLowerCase() === symbol.toLowerCase()
-      );
-    }
+    const tokens = dex
+      ? this.tokensByDex[dex]?.[chainId] || []
+      : this.tokensByChain[chainId] || [];
+
+    return tokens.find(
+      (token) => token.symbol.toLowerCase() === symbol.toLowerCase()
+    );
   }
 
   // Find token by address (case-insensitive)
-  findTokenByAddress(
+  public findTokenByAddress(
     address: string,
     chainId: number,
     dex?: string
   ): TokenInfo | undefined {
     const normalizedAddress = address.toLowerCase();
+    const tokens = dex
+      ? this.tokensByDex[dex]?.[chainId] || []
+      : this.tokensByChain[chainId] || [];
 
-    if (dex) {
-      const tokens = this.tokensByDex[dex]?.[chainId] || [];
-      return tokens.find(
-        (token) => token.address.toLowerCase() === normalizedAddress
-      );
-    } else {
-      const tokens = this.tokensByChain[chainId] || [];
-      return tokens.find(
-        (token) => token.address.toLowerCase() === normalizedAddress
-      );
-    }
+    return tokens.find(
+      (token) => token.address.toLowerCase() === normalizedAddress
+    );
   }
 
   // Search tokens by any field
-  searchTokens(query: string, chainId: number, dex?: string): TokenInfo[] {
+  public searchTokens(
+    query: string,
+    chainId: number,
+    dex?: string
+  ): TokenInfo[] {
     const searchTerm = query.toLowerCase();
-
-    let tokens: TokenInfo[] = [];
-    if (dex) {
-      tokens = this.tokensByDex[dex]?.[chainId] || [];
-    } else {
-      tokens = this.tokensByChain[chainId] || [];
-    }
+    const tokens = dex
+      ? this.tokensByDex[dex]?.[chainId] || []
+      : this.tokensByChain[chainId] || [];
 
     return tokens.filter(
       (token) =>
@@ -80,3 +72,6 @@ export class TokenService {
     );
   }
 }
+
+// ✅ Export a singleton instance
+export const tokenService = new TokenService();

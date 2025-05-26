@@ -7,9 +7,9 @@ import {
   OrderStatus,
 } from "@cowprotocol/cow-sdk";
 import { ethers } from "ethers";
-import { TokenService } from "../token/token.service";
 import { EthereumWallet, SwapResult, TokenInfo } from "../../types";
 import { CONFIG } from "../../config";
+import { tokenService } from "../token/token.service";
 
 // ERC20 ABI for token approval
 const ERC20_ABI = [
@@ -23,11 +23,9 @@ const ERC20_ABI = [
 const VAULT_RELAYER_ADDRESS = "0xC92E8bdf79f0507f65a392b0ab4667716BFE0110";
 
 export class CowSwapService {
-  private tokenService: TokenService;
   private provider: ethers.providers.JsonRpcProvider;
 
   constructor() {
-    this.tokenService = new TokenService();
     this.provider = new ethers.providers.JsonRpcProvider(
       CONFIG.RPC_URL || "https://sepolia.drpc.org"
     );
@@ -41,16 +39,16 @@ export class CowSwapService {
     chainId: number
   ): Promise<TokenInfo | undefined> {
     // First try direct lookup by symbol
-    let token = this.tokenService.findTokenBySymbol(tokenQuery, chainId);
+    let token = tokenService.findTokenBySymbol(tokenQuery, chainId);
 
     // If not found, try by address
     if (!token && ethers.utils.isAddress(tokenQuery)) {
-      token = this.tokenService.findTokenByAddress(tokenQuery, chainId);
+      token = tokenService.findTokenByAddress(tokenQuery, chainId);
     }
 
     // If still not found, search in all fields
     if (!token) {
-      const results = this.tokenService.searchTokens(tokenQuery, chainId);
+      const results = tokenService.searchTokens(tokenQuery, chainId);
       if (results.length > 0) {
         token = results[0];
       }
@@ -197,6 +195,142 @@ export class CowSwapService {
 
     console.log("⏰ Order monitoring timed out.");
     return { status: "TIMEOUT" as any };
+  }
+
+  /**
+   * Get a quote from CoW Protocol without executing the swap
+   */
+  async getQuote(
+    wallet: EthereumWallet,
+    sellTokenQuery: string,
+    buyTokenQuery: string,
+    sellAmount: string,
+    slippageBps: number = 50, // Default 0.5%
+    chainId: SupportedChainId = SupportedChainId.SEPOLIA
+  ): Promise<{
+    success: boolean;
+    buyAmount?: string;
+    sellAmount?: string;
+    buyToken?: string;
+    sellToken?: string;
+    message?: string;
+  }> {
+    try {
+      // Find tokens
+      const sellToken = await this.findToken(sellTokenQuery, chainId);
+      const buyToken = await this.findToken(buyTokenQuery, chainId);
+
+      if (!sellToken) {
+        return {
+          success: false,
+          message: `Sell token not found: ${sellTokenQuery}`,
+        };
+      }
+
+      if (!buyToken) {
+        return {
+          success: false,
+          message: `Buy token not found: ${buyTokenQuery}`,
+        };
+      }
+
+      // Create ethers wallet from private key
+      const ethersWallet = new ethers.Wallet(wallet.privateKey, this.provider);
+
+      // Convert amount to token units based on decimals
+      const amountInWei = ethers.utils.parseUnits(
+        sellAmount,
+        sellToken.decimals
+      );
+
+      // Check if user has enough balance
+      const hasBalance = await this.checkTokenBalance(
+        ethersWallet,
+        sellToken.address,
+        amountInWei.toString()
+      );
+
+      if (!hasBalance) {
+        return {
+          success: false,
+          message: `Insufficient balance of ${sellToken.symbol}`,
+        };
+      }
+
+      // Check and approve token allowance
+      const { approved, txHash } = await this.checkAndApproveToken(
+        ethersWallet,
+        sellToken.address,
+        amountInWei.toString()
+      );
+
+      if (!approved) {
+        return {
+          success: false,
+          message: `Failed to approve ${sellToken.symbol} for trading`,
+        };
+      }
+
+      const cowSdk = new TradingSdk({
+        appCode: "garden",
+        chainId,
+        signer: ethersWallet,
+      });
+
+      // Define trade parameters
+      const parameters: TradeParameters = {
+        kind: OrderKind.SELL,
+        sellToken: sellToken.address,
+        sellTokenDecimals: sellToken.decimals,
+        amount: amountInWei.toString(),
+        buyToken: buyToken.address,
+        buyTokenDecimals: buyToken.decimals,
+        slippageBps,
+      };
+
+      console.log("Getting quote...");
+
+      try {
+        // Get a quote for the trade
+        const { quoteResults } = await cowSdk.getQuote(parameters);
+
+        // Display trade details
+        const formattedSellAmount = ethers.utils.formatUnits(
+          parameters.amount,
+          parameters.sellTokenDecimals
+        );
+
+        const buyAmount = quoteResults.amountsAndCosts.afterSlippage.buyAmount;
+        const formattedBuyAmount = ethers.utils.formatUnits(
+          buyAmount,
+          parameters.buyTokenDecimals
+        );
+
+        console.log(
+          `Submitting order to sell ${formattedSellAmount} ${sellToken.symbol} for at least ${formattedBuyAmount} ${buyToken.symbol}`
+        );
+
+        return {
+          success: true,
+          buyAmount: formattedBuyAmount,
+          sellAmount: formattedSellAmount,
+          buyToken: buyToken.symbol,
+          sellToken: sellToken.symbol,
+        };
+      } catch (error: any) {
+        console.error("Error getting CoW quote:", error);
+        return {
+          success: false,
+          message: `Error getting quote: ${error.message || "Unknown error"}`,
+        };
+      }
+    } catch (error: any) {
+      console.error("Error getting CoW quote:", error);
+      return {
+        success: false,
+        message: `Error getting quote: ${error.message || "Unknown error"}`,
+      };
+    }
   }
 
   /**

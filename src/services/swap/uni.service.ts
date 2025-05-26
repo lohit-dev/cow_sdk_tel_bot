@@ -1,9 +1,9 @@
 import { Token, CurrencyAmount, TradeType, Percent } from "@uniswap/sdk-core";
 import { Pool, Route, Trade, tickToPrice } from "@uniswap/v3-sdk";
 import { ethers } from "ethers";
-import { TokenService } from "../token/token.service";
 import { EthereumWallet, SwapResult, TokenInfo } from "../../types";
 import { CONFIG } from "../../config";
+import { tokenService } from "../token/token.service";
 
 // ERC20 ABI for token interactions
 const ERC20_ABI = [
@@ -27,13 +27,12 @@ const DEFAULT_SLIPPAGE_TOLERANCE_PERCENT = 3; // 3%
 const DEFAULT_TRANSACTION_DEADLINE_MINUTES = 20;
 
 export class UniswapService {
-  private tokenService: TokenService;
   private provider: ethers.providers.JsonRpcProvider;
 
   constructor() {
-    this.tokenService = new TokenService();
     this.provider = new ethers.providers.JsonRpcProvider(
-      CONFIG.RPC_URL || "https://sepolia.drpc.org"
+      CONFIG.RPC_URL ||
+        "https://eth-sepolia.g.alchemy.com/v2/zN3JM2LnBeD4lFHMlO_iA8IoQA8Ws9_r"
     );
   }
 
@@ -51,20 +50,16 @@ export class UniswapService {
     tokenQuery: string,
     chainId: number
   ): Promise<TokenInfo | undefined> {
-    let token = this.tokenService.findTokenBySymbol(tokenQuery, chainId, "uni");
+    let token = tokenService.findTokenBySymbol(tokenQuery, chainId, "uni");
 
     // If not found, try by address
     if (!token && ethers.utils.isAddress(tokenQuery)) {
-      token = this.tokenService.findTokenByAddress(tokenQuery, chainId, "uni");
+      token = tokenService.findTokenByAddress(tokenQuery, chainId, "uni");
     }
 
     // If still not found, search in all fields
     if (!token) {
-      const results = this.tokenService.searchTokens(
-        tokenQuery,
-        chainId,
-        "uni"
-      );
+      const results = tokenService.searchTokens(tokenQuery, chainId, "uni");
       if (results.length > 0) {
         token = results[0];
       }
@@ -205,8 +200,7 @@ export class UniswapService {
     token1: Token,
     chainId: number
   ): Promise<Pool> {
-    // Common fee tiers in Uniswap V3
-    const feeTiers = [500, 3000, 10000];
+    const feeTiers = [100, 200, 300, 500, 3000, 10000];
 
     // Get the factory contract
     const factoryContract = new ethers.Contract(
@@ -567,7 +561,6 @@ export class UniswapService {
         }
 
         // Wait for transaction confirmation
-        console.log("Waiting for transaction confirmation...");
         const receipt = await tx.wait();
 
         if (receipt.status === 1) {
@@ -612,6 +605,177 @@ export class UniswapService {
         success: false,
         message: `Error preparing swap: ${error.message || "Unknown error"}`,
         error,
+      };
+    }
+  }
+
+  /**
+   * Get a quote from Uniswap V3 without executing the swap
+   */
+  async getQuote(
+    wallet: EthereumWallet,
+    sellTokenQuery: string,
+    buyTokenQuery: string,
+    sellAmount: string,
+    slippageBps: number = DEFAULT_SLIPPAGE_TOLERANCE_PERCENT * 100, // Default 3%
+    chainId: number = CONFIG.CHAIN_ID || 11155111 // Default to Sepolia
+  ): Promise<{
+    success: boolean;
+    buyAmount?: string;
+    sellAmount?: string;
+    buyToken?: string;
+    sellToken?: string;
+    priceImpact?: string;
+    message?: string;
+  }> {
+    try {
+      console.log(`Starting Uniswap quote process...`);
+      console.log(`Sell token: ${sellTokenQuery}, Buy token: ${buyTokenQuery}`);
+      console.log(`Amount: ${sellAmount}, Chain ID: ${chainId}`);
+
+      // Find tokens
+      const sellToken = await this.findToken(sellTokenQuery, chainId);
+      const buyToken = await this.findToken(buyTokenQuery, chainId);
+
+      if (!sellToken) {
+        return {
+          success: false,
+          message: `Sell token not found: ${sellTokenQuery}`,
+        };
+      }
+
+      if (!buyToken) {
+        return {
+          success: false,
+          message: `Buy token not found: ${buyTokenQuery}`,
+        };
+      }
+
+      console.log(`Found tokens: ${sellToken.symbol} -> ${buyToken.symbol}`);
+
+      // Create wallet instance
+      const ethWallet = new ethers.Wallet(wallet.privateKey, this.provider);
+
+      // Check if user has enough balance
+      const hasBalance = await this.checkTokenBalance(
+        ethWallet,
+        sellToken.address,
+        sellAmount
+      );
+
+      if (!hasBalance) {
+        return {
+          success: false,
+          message: `Insufficient ${sellToken.symbol} balance for the swap`,
+        };
+      }
+
+      console.log(`Balance check passed for ${sellAmount} ${sellToken.symbol}`);
+
+      // Check if native ETH is involved
+      const isInputNative = this.isNativeETH(sellToken.address);
+      const isOutputNative = this.isNativeETH(buyToken.address);
+
+      // If selling tokens (not ETH), ensure allowance
+      let approvalResult = { approved: true };
+      if (!isInputNative) {
+        approvalResult = await this.ensureTokenAllowance(
+          ethWallet,
+          sellToken.address,
+          sellAmount
+        );
+
+        if (!approvalResult.approved) {
+          return {
+            success: false,
+            message: `Failed to approve ${sellToken.symbol} for trading`,
+          };
+        }
+      }
+
+      console.log("Token approval confirmed or not needed");
+
+      // Create SDK Token instances
+      const inputToken = await this.createToken(sellToken.address, chainId);
+      const outputToken = await this.createToken(buyToken.address, chainId);
+
+      // Find a working pool
+      console.log(
+        `Finding liquidity pool for ${inputToken.symbol}/${outputToken.symbol}...`
+      );
+      const pool = await this.findWorkingPool(inputToken, outputToken, chainId);
+
+      if (!pool) {
+        return {
+          success: false,
+          message: "No liquidity pool found for this token pair",
+        };
+      }
+
+      console.log(`Found pool with fee tier: ${pool.fee / 10000}%`);
+
+      // Create the trade
+      const amountIn = CurrencyAmount.fromRawAmount(
+        inputToken,
+        ethers.utils.parseUnits(sellAmount, inputToken.decimals).toString()
+      );
+
+      // Create a route with the pool
+      const route = new Route([pool], inputToken, outputToken);
+
+      // Create a trade
+      const trade = Trade.createUncheckedTrade({
+        route,
+        inputAmount: amountIn,
+        outputAmount: CurrencyAmount.fromRawAmount(
+          outputToken,
+          route.midPrice.quote(amountIn.wrapped).quotient.toString()
+        ),
+        tradeType: TradeType.EXACT_INPUT,
+      });
+
+      // Calculate expected output with price impact
+      const outputAmount = trade.outputAmount;
+      const formattedOutputAmount = outputAmount.toSignificant(6);
+      const priceImpact = trade.priceImpact.toSignificant(2);
+
+      console.log(`Uniswap quote analysis:`);
+      console.log(
+        `- Input: ${trade.inputAmount.toExact()} ${inputToken.symbol}`
+      );
+      console.log(
+        `- Expected output: ${formattedOutputAmount} ${outputToken.symbol}`
+      );
+      console.log(
+        `- Price: ${trade.executionPrice.toSignificant(6)} ${
+          outputToken.symbol
+        }/${inputToken.symbol}`
+      );
+      console.log(`- Price impact: ${priceImpact}%`);
+
+      // Apply slippage tolerance
+      const slippageTolerance = new Percent(slippageBps, 10_000);
+      const amountOutMinimum = trade.minimumAmountOut(slippageTolerance);
+      console.log(
+        `- Minimum output with slippage: ${amountOutMinimum.toExact()} ${
+          outputToken.symbol
+        }`
+      );
+
+      // Return the quote information
+      return {
+        success: true,
+        buyAmount: formattedOutputAmount,
+        sellAmount: sellAmount,
+        buyToken: buyToken.symbol,
+        sellToken: sellToken.symbol,
+        priceImpact: priceImpact,
+      };
+    } catch (error: any) {
+      console.error("Error getting Uniswap quote:", error);
+      return {
+        success: false,
+        message: `Error getting quote: ${error.message || "Unknown error"}`,
       };
     }
   }

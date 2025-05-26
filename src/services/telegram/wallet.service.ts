@@ -1,4 +1,5 @@
 import { BlockchainType, Wallet, BalanceInfo } from "../../types";
+import { loadTokens } from "../../utils/utils";
 import { getBlockchainService } from "../blockchain";
 
 export class WalletService {
@@ -123,6 +124,50 @@ export class WalletService {
   ): Promise<string> {
     const service = await getBlockchainService(blockchainType);
     return service.formatAddress(address);
+  }
+
+  /**
+   * Get public async token balances for all the wallets
+   */
+  public async getTokenBalances(
+    address: string,
+    blockchain: BlockchainType
+  ): Promise<{ symbol: string; balance: string; address: string }[]> {
+    try {
+      if (blockchain !== BlockchainType.ETHEREUM) return [];
+
+      const tokens = loadTokens(blockchain);
+      const balancePromises = tokens.map(async (token: any) => {
+        try {
+          const balanceInfo = await walletService.getBalance(
+            address,
+            blockchain,
+            token.address
+          );
+
+          return {
+            symbol: token.symbol,
+            balance: balanceInfo.balance,
+            address: token.address,
+          };
+        } catch (error) {
+          console.error(
+            `Error fetching balance for token ${token.symbol}:`,
+            error
+          );
+          return {
+            symbol: token.symbol,
+            balance: "0.0",
+            address: token.address,
+          };
+        }
+      });
+
+      return await Promise.all(balancePromises);
+    } catch (error) {
+      console.error(`Error getting token balances:`, error);
+      return [];
+    }
   }
 }
 
