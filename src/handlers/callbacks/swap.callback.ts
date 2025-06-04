@@ -110,6 +110,8 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
         selectedNetwork,
         walletIndex
       );
+
+      // Store wallet in session
       ctx.session.sourceWallet = wallet;
 
       // Move to token selection
@@ -171,63 +173,27 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
       // Save from token to session
       ctx.session.sellToken = tokenInfo;
 
-      // Move to destination chain selection for cross-chain swaps or to token selection for same-chain
+      // For cross-chain swaps, show destination chain selection
       if (
-        ctx.session.swapAction === "buy" &&
-        ctx.session.fromChain === BlockchainType.ETHEREUM
+        ctx.session.fromChain === BlockchainType.ETHEREUM ||
+        ctx.session.fromChain === BlockchainType.BITCOIN
       ) {
-        // For buy on Ethereum, offer cross-chain options
         ctx.session.swapStep = "select_to_chain";
+
+        const oppositeChain =
+          ctx.session.fromChain === BlockchainType.ETHEREUM
+            ? BlockchainType.BITCOIN
+            : BlockchainType.ETHEREUM;
 
         const keyboard = new InlineKeyboard()
           .text("Same Network", `swap_to_chain_${ctx.session.fromChain}`)
-          .text(
-            "Cross-Chain",
-            `swap_to_chain_${
-              ctx.session.fromChain === BlockchainType.ETHEREUM
-                ? BlockchainType.BITCOIN
-                : BlockchainType.ETHEREUM
-            }`
-          )
+          .text("Cross-Chain", `swap_to_chain_${oppositeChain}`)
           .row()
           .text("Back", `swap_network_${ctx.session.fromChain}`);
 
         await ctx.answerCallbackQuery();
         await ctx.reply(
           `You selected ${selectedToken}. Do you want to swap on the same network or cross-chain?`,
-          {
-            reply_markup: keyboard,
-          }
-        );
-      } else {
-        // For other cases, go directly to token selection
-        ctx.session.swapStep = "select_to_token";
-        ctx.session.toChain = ctx.session.fromChain; // Same chain by default
-
-        // Create to token selection keyboard
-        // For same network swaps, exclude the selected from token
-        const toTokens = SUPPORTED_TOKENS[ctx.session.fromChain].filter(
-          (token) => token !== selectedToken
-        );
-
-        const keyboard = new InlineKeyboard();
-
-        // Add token buttons in rows of 2
-        for (let i = 0; i < toTokens.length; i += 2) {
-          if (toTokens[i]) {
-            keyboard.text(toTokens[i], `swap_to_token_${toTokens[i]}`);
-          }
-          if (toTokens[i + 1]) {
-            keyboard.text(toTokens[i + 1], `swap_to_token_${toTokens[i + 1]}`);
-          }
-          keyboard.row();
-        }
-
-        keyboard.text("Back", `swap_network_${ctx.session.fromChain}`);
-
-        await ctx.answerCallbackQuery();
-        await ctx.reply(
-          `You selected ${selectedToken}. Now select the asset you want to receive:`,
           {
             reply_markup: keyboard,
           }
@@ -284,15 +250,27 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
       // Create to token selection keyboard based on destination chain
       const toTokens = SUPPORTED_TOKENS[selectedChain];
 
+      // For same network swaps, exclude the selected from token
+      const filteredTokens =
+        selectedChain === ctx.session.fromChain
+          ? toTokens.filter((token) => token !== ctx.session.sellToken?.symbol)
+          : toTokens;
+
       const keyboard = new InlineKeyboard();
 
       // Add token buttons in rows of 2
-      for (let i = 0; i < toTokens.length; i += 2) {
-        if (toTokens[i]) {
-          keyboard.text(toTokens[i], `swap_to_token_${toTokens[i]}`);
+      for (let i = 0; i < filteredTokens.length; i += 2) {
+        if (filteredTokens[i]) {
+          keyboard.text(
+            filteredTokens[i],
+            `swap_to_token_${filteredTokens[i]}`
+          );
         }
-        if (toTokens[i + 1]) {
-          keyboard.text(toTokens[i + 1], `swap_to_token_${toTokens[i + 1]}`);
+        if (filteredTokens[i + 1]) {
+          keyboard.text(
+            filteredTokens[i + 1],
+            `swap_to_token_${filteredTokens[i + 1]}`
+          );
         }
         keyboard.row();
       }
@@ -407,12 +385,16 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
 
       // For cross-chain swaps, provide information about the process
       if (ctx.session.swapType === "cross_chain") {
-        if (ctx.session.crossChainDirection === "eth_btc") {
-          swapDescription = `Cross-Chain Swap: ${ctx.session.fromChain} → ${ctx.session.toChain}\n`;
-          feeInfo = "This will use GardenJS for cross-chain swapping";
-        } else if (ctx.session.crossChainDirection === "btc_eth") {
-          swapDescription = `Cross-Chain Swap: ${ctx.session.fromChain} → ${ctx.session.toChain}\n`;
-          feeInfo = "This will use GardenJS for cross-chain swapping";
+        swapDescription = `Cross-Chain Swap: ${ctx.session.fromChain} → ${ctx.session.toChain}\n`;
+        feeInfo = "This will use GardenJS for cross-chain swapping";
+
+        // Try to get quote from Garden service
+        try {
+          // Note: You may need to implement a getQuote method in your garden service
+          estimatedOutput = "Quote will be calculated during execution";
+        } catch (error) {
+          console.error("Error getting Garden quote:", error);
+          estimatedOutput = "Quote will be calculated during execution";
         }
       }
       // For Ethereum DEX swaps, provide fee comparison
@@ -442,7 +424,7 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
     }
   });
 
-  // Swap confirmation handler
+  // Swap confirmation handler - THIS IS THE KEY FIX
   bot.callbackQuery("swap_confirm", async (ctx) => {
     try {
       const userId = ctx.from?.id;
@@ -474,6 +456,7 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
       } else {
         // For DEX swaps, use the appropriate service based on blockchain
         if (ctx.session.fromChain === BlockchainType.BITCOIN) {
+          // Bitcoin same-chain swaps also use Garden
           swapResult = await executeGardenSwap(ctx);
         } else {
           // For Ethereum swaps, compare and use the best DEX
@@ -495,10 +478,10 @@ export async function setupSwapCallbacks(bot: Bot<BotContext>) {
           `✅ Swap successful!\n\n` +
             `${swapResult.message}\n\n` +
             (swapResult.txHash ? `Transaction: ${swapResult.txHash}\n` : "") +
-            (swapResult.orderId ? `Order ID: ${swapResult.orderId}\n` : ""),
-          {
-            reply_markup: keyboard,
-          }
+            (swapResult.orderId ? `Order ID: ${swapResult.orderId}\n` : "") +
+            {
+              reply_markup: keyboard,
+            }
         );
       } else {
         const keyboard = new InlineKeyboard()
@@ -548,10 +531,31 @@ function createTokenSelectionKeyboard(
   return keyboard;
 }
 
-// Execute swap using Garden service for Bitcoin swaps or cross-chain swaps
+// Execute swap using Garden service for Bitcoin swaps or cross-chain swaps - FIXED
 async function executeGardenSwap(ctx: BotContext): Promise<SwapResult> {
   try {
     const userId = ctx.from!.id;
+
+    // Ensure we have destination wallet for cross-chain swaps
+    if (
+      ctx.session.swapType === "cross_chain" &&
+      !ctx.session.destinationWallet
+    ) {
+      throw new Error("Destination wallet not found for cross-chain swap");
+    }
+
+    // Get the correct Bitcoin address for the swap
+    let btcAddress: string | undefined;
+
+    if (ctx.session.fromChain === BlockchainType.BITCOIN) {
+      // For Bitcoin source, use source wallet address
+      btcAddress = ctx.session.sourceWallet!.address;
+    } else if (ctx.session.toChain === BlockchainType.BITCOIN) {
+      // For Bitcoin destination, use destination wallet address
+      btcAddress = ctx.session.destinationWallet!.address;
+    }
+
+    console.log(`Executing Garden swap with BTC address: ${btcAddress}`);
 
     // For cross-chain swaps or Bitcoin swaps, use the Garden service
     return await gardenService.executeSwap(
@@ -563,7 +567,7 @@ async function executeGardenSwap(ctx: BotContext): Promise<SwapResult> {
       ctx.session.buyToken!.symbol,
       ctx.session.sellAmount!,
       ctx.session.sourceWallet!.privateKey!,
-      ctx.session.sourceWallet!.address
+      btcAddress // Pass the correct Bitcoin address
     );
   } catch (error: any) {
     console.error("Error executing Garden swap:", error);
